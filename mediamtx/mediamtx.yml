@@ -1,0 +1,28 @@
+# MediaMTX config for "Voice Assistant With Eyes".
+# Only the settings we need are listed; everything else uses MediaMTX defaults.
+#
+#   Publish (WHIP):  http://<server-ip>:8889/cam/whip    (browser test page: /cam/publish)
+#   Watch   (WHEP):  http://<server-ip>:8889/cam          (dashboard / browser)
+#   Read    (RTSP):  rtsp://localhost:8554/cam            (backend, OpenCV)
+
+logLevel: info
+
+# RTSP server - the backend reads frames from here.
+rtsp: yes
+rtspAddress: :8554
+
+# WebRTC server - WHIP publish from phone/browser, WHEP playback.
+webrtc: yes
+webrtcAddress: :8889            # HTTP port for WHIP/WHEP and the test pages
+webrtcLocalUDPAddress: :8189    # UDP port that carries the actual video/audio
+
+# Protocols we don't use - turned off to keep things simple.
+rtmp: no
+hls: no
+srt: no
+moq: no
+
+paths:
+  # The single camera stream. Anyone on the network may publish/read (demo setup).
+  cam:
+    source: publisher
