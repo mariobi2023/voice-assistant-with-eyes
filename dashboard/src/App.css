@@ -1,0 +1,70 @@
+/* High-contrast theme: black background, white text, yellow accents. */
+:root {
+  --bg: #000;
+  --panel: #111;
+  --border: #fff;
+  --text: #fff;
+  --muted: #ccc;
+  --accent: #ffd400;
+  --ok: #4cff7a;
+  --warn: #ff8c42;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+h1, h2 { margin: 0 0 12px; color: var(--accent); }
+h1 { font-size: 1.6rem; }
+h2 { font-size: 1.25rem; }
+p { margin: 4px 0; }
+
+.page { max-width: 1400px; margin: 0 auto; padding: 16px; }
+
+.header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+.badge { border: 2px solid var(--accent); color: var(--accent); padding: 2px 10px; font-weight: bold; }
+.error { border: 2px solid var(--warn); color: var(--warn); padding: 8px; }
+
+/* Wide screens: video (left, tall) | Q&A and status (right); timeline full width below. */
+.grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+.video-panel { grid-row: span 2; }
+.timeline-panel { grid-column: 1 / -1; }
+
+/* Phones / narrow windows: one column. */
+@media (max-width: 800px) {
+  .grid { grid-template-columns: 1fr; }
+  .video-panel { grid-row: auto; }
+}
+
+.panel { background: var(--panel); border: 2px solid var(--border); border-radius: 8px; padding: 16px; min-width: 0; }
+
+video { width: 100%; aspect-ratio: 16 / 9; background: #222; border-radius: 4px; display: block; }
+
+.ok { color: var(--ok); font-weight: bold; }
+.warn { color: var(--warn); font-weight: bold; }
+.meta { color: var(--muted); font-size: 0.9rem; }
+
+.status-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; }
+.status-list dt { color: var(--muted); }
+.status-list dd { margin: 0; font-weight: bold; }
+
+.qa-panel { max-height: 480px; overflow-y: auto; }
+.qa-list { list-style: none; padding: 0; margin: 0; }
+.qa-item { border-top: 1px solid #555; padding: 10px 0; }
+.qa-item:first-child { border-top: none; }
+
+/* Timeline scrolls sideways. */
+.timeline { display: flex; gap: 12px; overflow-x: auto; list-style: none; padding: 0 0 8px; margin: 0; }
+.frame-card { flex: 0 0 240px; border: 1px solid #555; border-radius: 6px; padding: 8px; }
+.frame-card img, .frame-placeholder { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 4px; }
+.frame-placeholder {
+  display: flex; align-items: center; justify-content: center;
+  background: #222; color: var(--muted); border: 1px dashed #777;
+}
