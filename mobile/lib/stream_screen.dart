@@ -1,7 +1,9 @@
-// Main screen: status text, camera preview and one big Start / Stop button.
+// Main screen: status text, camera preview, the big Start / Stop button
+// and the big Ask button (AskPanel).
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'ask_panel.dart';
 import 'main.dart' show kAccent, kOk, kWarn;
 import 'settings.dart';
 import 'whip_client.dart';
@@ -51,8 +53,8 @@ class _StreamScreenState extends State<StreamScreen> {
   }
 
   Future<void> _loadServerIp() async {
-    final ip = await SettingsStore.loadServerIp();
-    setState(() => _serverIp = ip);
+    final settings = await SettingsStore.load();
+    if (mounted) setState(() => _serverIp = settings.serverIp);
   }
 
   void _showError(String message) {
@@ -152,7 +154,7 @@ class _StreamScreenState extends State<StreamScreen> {
 
             // One big button: Start when idle, Stop when streaming.
             SizedBox(
-              height: 140,
+              height: 110,
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: streaming ? kWarn : kAccent,
@@ -167,6 +169,10 @@ class _StreamScreenState extends State<StreamScreen> {
                 ),
               ),
             ),
+            const SizedBox(height: 16),
+
+            // Voice: big Ask button + last question/answer.
+            const AskPanel(),
           ],
         ),
       ),
