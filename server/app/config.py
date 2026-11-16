@@ -28,3 +28,13 @@ DARK_MAX = 60.0             # mean brightness (0-255) below which a frame counts
 FRAMES_DIR = SERVER_DIR / "frames"  # JPEG files of kept frames
 FRAME_MAX_WIDTH = 960       # resize wider frames before saving (smaller files, faster OCR later)
 JPEG_QUALITY = 85           # 0-100, JPEG compression quality
+
+# ---------- Database ----------
+DATABASE_URL = os.getenv("DATABASE_URL", "")  # secret (contains the password): set it in .env
+DB_POOL_SIZE = 5            # max connections shared by ingest, retention and web requests
+DB_TIMEOUT_SECONDS = 5      # wait at most this long for a free connection
+
+# ---------- Retention (privacy: keep only what is needed) ----------
+# Can be overridden from the environment for testing, e.g.  $env:RETENTION_MINUTES = "1"
+RETENTION_MINUTES = float(os.getenv("RETENTION_MINUTES", "30"))  # frames older than this are deleted
+RETENTION_CHECK_SECONDS = 60  # how often the cleanup runs

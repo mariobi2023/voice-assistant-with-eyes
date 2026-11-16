@@ -8,3 +8,7 @@ numpy<2.1                  # arrays used by OpenCV
 Pillow==10.4.0             # image format needed by imagehash
 ImageHash==4.3.1           # perceptual hash (pHash) to skip near-duplicate frames
 python-dotenv==1.0.1       # load settings and secrets from server/.env
+
+# --- Step 2: database ---
+psycopg[binary]==3.2.3     # PostgreSQL driver
+psycopg-pool==3.2.4        # connection pool shared by the background threads and web requests

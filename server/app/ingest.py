@@ -7,7 +7,7 @@ and keeps only frames that are:
 Kept frames are saved as JPEG in server/frames/.
 
 Runs in a background thread, so the web server (/ask) is never blocked by it.
-Test on its own:   python -m app.ingest
+Test on its own:   python -m app.ingest   (also stores rows in the DB and runs retention)
 """
 import logging
 import os
@@ -20,7 +20,8 @@ import cv2
 import imagehash
 from PIL import Image
 
-from app import config
+from app import config, db, retention
+from app.migrate import apply_migrations
 
 log = logging.getLogger("ingest")
 
@@ -175,21 +176,38 @@ class Ingestor:
         log.info("Frame kept: %s (sharpness %.0f, brightness %.0f)", image_path, sharpness, brightness)
 
         if self.on_frame_kept:
-            self.on_frame_kept(frame, info)
+            try:
+                self.on_frame_kept(frame, info)
+            except Exception:
+                # e.g. database down: log it, but keep reading the stream.
+                # (The JPEG stays on disk; retention's file sweep removes it later.)
+                log.exception("Could not store kept frame %s", image_path)
         return info
 
 
+def save_frame_to_db(frame, info):
+    """on_frame_kept callback: store the kept frame's row in the frames table."""
+    info["id"] = db.insert_frame(info)
+    log.info("Frame stored in database with id %d", info["id"])
+
+
 def main():
-    """Run the ingest on its own (step 1 test). Stop with Ctrl+C."""
+    """Run ingest + database + retention without the web server (step 2 test). Stop with Ctrl+C.
+    From step 4 on, main.py starts all of this together with the API."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    ingestor = Ingestor()
+    apply_migrations()  # make sure the tables exist
+    stop_event = threading.Event()
+    retention.start_retention_thread(stop_event)
+    ingestor = Ingestor(on_frame_kept=save_frame_to_db)
     ingestor.start()
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         log.info("Stopping...")
+        stop_event.set()
         ingestor.stop()
+        db.close_pool()
 
 
 if __name__ == "__main__":
