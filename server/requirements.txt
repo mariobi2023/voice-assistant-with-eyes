@@ -1,0 +1,10 @@
+# Backend dependencies. Install inside the virtual environment:
+#   pip install -r requirements.txt
+# More packages are added at each build step.
+
+# --- Step 1: ingest (read the stream, pick good frames) ---
+opencv-python==4.10.0.84   # read RTSP, image maths (sharpness, brightness), save JPEG
+numpy<2.1                  # arrays used by OpenCV
+Pillow==10.4.0             # image format needed by imagehash
+ImageHash==4.3.1           # perceptual hash (pHash) to skip near-duplicate frames
+python-dotenv==1.0.1       # load settings and secrets from server/.env
