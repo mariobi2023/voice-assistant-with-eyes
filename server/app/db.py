@@ -8,6 +8,7 @@ import logging
 import threading
 
 from pgvector.psycopg import register_vector
+from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
@@ -79,6 +80,78 @@ def count_frames():
     """How many frames are stored (shown by GET /status)."""
     with get_pool().connection() as conn:
         return conn.execute("SELECT count(*) FROM frames").fetchone()[0]
+
+
+# ---------- frames: retrieval for the assistant ----------
+# Every search returns dicts with the same keys, plus "age_seconds" (how long ago it was seen).
+
+_FRAME_COLUMNS = """id, captured_at, image_path, ocr_text, objects, caption,
+                    EXTRACT(EPOCH FROM now() - captured_at)::float AS age_seconds"""
+
+
+def _fetch_dicts(sql, params):
+    """Run a SELECT and return the rows as a list of dicts (column name -> value)."""
+    with get_pool().connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            return cur.execute(sql, params).fetchall()
+
+
+def newest_frame():
+    """The most recent frame, or None. Used for 'what is in front of me now?'."""
+    rows = _fetch_dicts(f"SELECT {_FRAME_COLUMNS} FROM frames ORDER BY captured_at DESC LIMIT 1", ())
+    return rows[0] if rows else None
+
+
+def search_similar(query_vec, seconds, limit):
+    """Frames from the last `seconds`, closest in MEANING to the question (cosine similarity)."""
+    return _fetch_dicts(
+        f"""SELECT {_FRAME_COLUMNS}, 1 - (embedding <=> %s) AS similarity
+            FROM frames
+            WHERE captured_at > now() - %s * interval '1 second' AND embedding IS NOT NULL
+            ORDER BY embedding <=> %s
+            LIMIT %s""",
+        (query_vec, seconds, query_vec, limit),
+    )
+
+
+def search_ocr_keywords(words, seconds, limit):
+    """Frames from the last `seconds` whose OCR text contains one of `words` (any case). Newest first."""
+    patterns = [f"%{w}%" for w in words]
+    return _fetch_dicts(
+        f"""SELECT {_FRAME_COLUMNS}
+            FROM frames
+            WHERE captured_at > now() - %s * interval '1 second' AND ocr_text ILIKE ANY(%s)
+            ORDER BY captured_at DESC
+            LIMIT %s""",
+        (seconds, patterns, limit),
+    )
+
+
+def search_frames_with_text(query_vec, seconds, limit):
+    """Frames from the last `seconds` that contain ANY text, most similar to the question first
+    (frames not embedded yet come last, newest first)."""
+    return _fetch_dicts(
+        f"""SELECT {_FRAME_COLUMNS}, 1 - (embedding <=> %s) AS similarity
+            FROM frames
+            WHERE captured_at > now() - %s * interval '1 second' AND ocr_text <> ''
+            ORDER BY embedding <=> %s NULLS LAST, captured_at DESC
+            LIMIT %s""",
+        (query_vec, seconds, query_vec, limit),
+    )
+
+
+# ---------- qa_log ----------
+
+def insert_qa(language, question, answer, frame_ids, confidence, latency_ms):
+    """Save one question/answer (dashboard history + tests). Returns the new id."""
+    with get_pool().connection() as conn:
+        row = conn.execute(
+            """INSERT INTO qa_log (language, question, answer, frame_ids, confidence, latency_ms)
+               VALUES (%s, %s, %s, %s, %s, %s)
+               RETURNING id""",
+            (language, question, answer, frame_ids, confidence, latency_ms),
+        ).fetchone()
+    return row[0]
 
 
 def delete_frames_older_than(minutes):

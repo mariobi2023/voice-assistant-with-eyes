@@ -69,3 +69,30 @@ EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 # ---------- Vision worker ----------
 VISION_QUEUE_MAX = 5        # frames waiting for OCR/YOLO; when full, the OLDEST waiting one is skipped
+
+# ---------- Assistant: retrieval ("which frames answer the question?") ----------
+NOW_MAX_AGE_SECONDS = 5     # "what is in front of me": newest frame older than this → "I'm not sure"
+SEARCH_WINDOW_SECONDS = 180  # "just passed" / "what did the sign say": look back this far
+TOP_K_FRAMES = 3            # max frames sent to the answer model
+# Best cosine similarity below this → "I'm not sure". Measured in step 3: real matches scored
+# 0.25-0.53, unrelated frames 0.04-0.05. Tune on real footage.
+MIN_SIMILARITY = 0.20
+
+# ---------- Assistant: answer model ----------
+# The phone gives up after 15 s, so the whole answer must be ready before that.
+ANSWER_DEADLINE_SECONDS = 12
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")  # secret: set it in .env
+# Check which models YOUR key can use with:  python -m app.assistant --list-models
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+GEMINI_THINKING_LEVEL = "minimal"  # least "thinking" = fastest answer (set None for models without it)
+GEMINI_TIMEOUT_SECONDS = 8  # then fall back to Ollama with the time that is left
+# 127.0.0.1, not "localhost": on Windows "localhost" tries IPv6 first, which doubles the wait
+# when Ollama is not running.
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+OLLAMA_CONNECT_TIMEOUT_SECONDS = 1  # Ollama runs on this PC: if it doesn't connect in 1 s, it's off
+OLLAMA_MODEL = "qwen2.5vl:3b"  # small vision model, runs on CPU
+OLLAMA_IMAGE_WIDTH = 512    # Ollama on CPU is slow: send ONE small image only
+ANSWER_MAX_TOKENS = 300
+
+# ---------- Web API ----------
+CORS_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]  # the React dashboard (Vite)

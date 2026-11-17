@@ -31,3 +31,9 @@ easyocr==1.7.2                   # OCR for English, French and Arabic
 ultralytics==8.4.215             # YOLO-World object detection with our own class list
 sentence-transformers==6.3.0     # multilingual text embeddings (384 dims)
 pgvector==0.5.1                  # store/read numpy vectors in PostgreSQL "vector" columns
+
+# --- Step 4: assistant + web API ---
+fastapi==0.141.1                 # the web API (/ask, /status, ...) with automatic /docs page
+uvicorn[standard]==0.54.0        # the web server that runs FastAPI
+google-genai==3.4.0              # Gemini API (answer model)
+requests==2.34.2                 # HTTP calls to the local Ollama fallback
