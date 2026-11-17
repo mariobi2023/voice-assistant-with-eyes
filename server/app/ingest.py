@@ -4,13 +4,16 @@ Reads the camera stream from MediaMTX (RTSP), checks about SAMPLE_FPS frames per
 and keeps only frames that are:
   1. sharp enough  (Laplacian variance >= SHARPNESS_MIN), and
   2. a new scene   (pHash distance to the last kept frame >= HASH_MIN).
-Kept frames are saved as JPEG in server/frames/.
+Kept frames are saved as JPEG in server/frames/ and as a row in the frames table.
+A second thread (VisionWorker) then adds OCR text, objects, caption and embedding to the row.
 
-Runs in a background thread, so the web server (/ask) is never blocked by it.
-Test on its own:   python -m app.ingest   (also stores rows in the DB and runs retention)
+Everything runs in background threads, so the web server (/ask) is never blocked.
+Test on its own:   python -m app.ingest   (ingest + vision + database + retention)
 """
 import logging
 import os
+import queue
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -20,7 +23,7 @@ import cv2
 import imagehash
 from PIL import Image
 
-from app import config, db, retention
+from app import config, db, embeddings, retention, vision
 from app.migrate import apply_migrations
 
 log = logging.getLogger("ingest")
@@ -185,29 +188,113 @@ class Ingestor:
         return info
 
 
-def save_frame_to_db(frame, info):
-    """on_frame_kept callback: store the kept frame's row in the frames table."""
-    info["id"] = db.insert_frame(info)
-    log.info("Frame stored in database with id %d", info["id"])
+# ---------- The vision worker (OCR + YOLO + embedding) ----------
+
+class VisionWorker:
+    """Second background thread: analyzes stored frames one by one.
+
+    OCR takes 1-3 s per frame on a CPU. Doing it here, not in the Ingestor thread,
+    means slow OCR never makes us fall behind the live stream, and never blocks /ask.
+    """
+
+    def __init__(self):
+        self._queue = queue.Queue(maxsize=config.VISION_QUEUE_MAX)  # (frame_id, frame) waiting
+        self._stop_event = threading.Event()
+        self._thread = None
+
+    def start(self):
+        """Load the models, then start the analysis thread."""
+        vision.load_models()
+        embeddings.get_model()
+        self._thread = threading.Thread(target=self._run, name="vision", daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        """Ask the thread to finish (it checks every second)."""
+        self._stop_event.set()
+
+    def submit(self, frame_id, frame):
+        """Queue a frame for analysis. If the queue is full, skip the OLDEST waiting frame:
+        fresh frames matter most for 'what is in front of me'."""
+        try:
+            self._queue.put_nowait((frame_id, frame))
+        except queue.Full:
+            skipped_id, _ = self._queue.get_nowait()
+            log.info("Vision busy: frame %d skipped analysis (kept without OCR/objects)", skipped_id)
+            self._queue.put_nowait((frame_id, frame))
+
+    def _run(self):
+        """Take frames from the queue and analyze them until stopped."""
+        while not self._stop_event.is_set():
+            try:
+                frame_id, frame = self._queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            try:
+                self.analyze_and_store(frame_id, frame)
+            except Exception:
+                log.exception("Vision failed for frame %d", frame_id)  # keep the thread alive
+
+    def analyze_and_store(self, frame_id, frame):
+        """OCR + objects + caption + embedding for one frame, saved into its database row."""
+        started = time.monotonic()
+        analysis = vision.analyze_frame(frame)
+        text = embeddings.build_frame_text(analysis["ocr_text"], analysis["caption"])
+        embedding = embeddings.embed_text(text)  # None if nothing was read or seen
+        if not db.update_frame_vision(frame_id, analysis, embedding):
+            log.info("Frame %d was deleted before analysis finished", frame_id)
+            return
+        log.info("Frame %d analyzed in %.1f s: text=%r objects=[%s]", frame_id,
+                 time.monotonic() - started, analysis["ocr_text"], analysis["caption"])
 
 
-def main():
-    """Run ingest + database + retention without the web server (step 2 test). Stop with Ctrl+C.
-    From step 4 on, main.py starts all of this together with the API."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# ---------- Starting everything together ----------
+
+def start_pipeline():
+    """Start ingest + vision + retention threads. Returns a function that stops them all.
+    Used by `python -m app.ingest` now and by main.py (the web server) from step 4."""
     apply_migrations()  # make sure the tables exist
     stop_event = threading.Event()
     retention.start_retention_thread(stop_event)
-    ingestor = Ingestor(on_frame_kept=save_frame_to_db)
+
+    vision_worker = VisionWorker()
+    vision_worker.start()  # loads the models (can take ~30 s the first time: downloads)
+
+    def store_and_queue(frame, info):
+        """on_frame_kept: save the row right away (fast), then queue the frame for analysis."""
+        info["id"] = db.insert_frame(info)
+        log.info("Frame stored in database with id %d", info["id"])
+        vision_worker.submit(info["id"], frame)
+
+    ingestor = Ingestor(on_frame_kept=store_and_queue)
     ingestor.start()
+
+    def stop_pipeline():
+        stop_event.set()
+        vision_worker.stop()
+        ingestor.stop()
+        db.close_pool()
+
+    return ingestor, stop_pipeline
+
+
+def setup_logging():
+    """Log to the console in UTF-8: the Windows console default (cp1252) cannot print
+    Arabic OCR text and would show logging errors instead."""
+    sys.stderr.reconfigure(encoding="utf-8")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+
+def main():
+    """Run the whole pipeline without the web server (test). Stop with Ctrl+C."""
+    setup_logging()
+    _ingestor, stop_pipeline = start_pipeline()
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         log.info("Stopping...")
-        stop_event.set()
-        ingestor.stop()
-        db.close_pool()
+        stop_pipeline()
 
 
 if __name__ == "__main__":

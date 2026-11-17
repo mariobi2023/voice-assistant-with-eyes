@@ -7,6 +7,8 @@ each function borrows a connection, runs its query and gives it back.
 import logging
 import threading
 
+from pgvector.psycopg import register_vector
+from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from app import config
@@ -17,6 +19,11 @@ _pool = None
 _pool_lock = threading.Lock()  # two threads must not create two pools at the same time
 
 
+def _configure_connection(conn):
+    """Run on each new connection: teach psycopg the pgvector 'vector' type (numpy array <-> vector)."""
+    register_vector(conn)
+
+
 def get_pool():
     """Create the connection pool the first time it is needed, then reuse it."""
     global _pool
@@ -25,7 +32,8 @@ def get_pool():
             if not config.DATABASE_URL:
                 raise RuntimeError("DATABASE_URL is missing: copy .env.example to .env and fill it in")
             _pool = ConnectionPool(config.DATABASE_URL, min_size=1, max_size=config.DB_POOL_SIZE,
-                                   timeout=config.DB_TIMEOUT_SECONDS, open=True)
+                                   timeout=config.DB_TIMEOUT_SECONDS, configure=_configure_connection,
+                                   open=True)
         return _pool
 
 
@@ -51,6 +59,20 @@ def insert_frame(info):
              info.get("enhanced", False)),
         ).fetchone()
     return row[0]
+
+
+def update_frame_vision(frame_id, analysis, embedding):
+    """Fill in OCR text, objects, caption and embedding of a frame (after vision ran).
+    Returns False if the frame no longer exists (already deleted by retention)."""
+    with get_pool().connection() as conn:
+        cur = conn.execute(
+            """UPDATE frames
+               SET ocr_text = %s, ocr_conf = %s, objects = %s, caption = %s, embedding = %s
+               WHERE id = %s""",
+            (analysis["ocr_text"], analysis["ocr_conf"], Jsonb(analysis["objects"]),
+             analysis["caption"], embedding, frame_id),
+        )
+        return cur.rowcount == 1
 
 
 def count_frames():

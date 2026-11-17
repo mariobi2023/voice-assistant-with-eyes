@@ -38,3 +38,34 @@ DB_TIMEOUT_SECONDS = 5      # wait at most this long for a free connection
 # Can be overridden from the environment for testing, e.g.  $env:RETENTION_MINUTES = "1"
 RETENTION_MINUTES = float(os.getenv("RETENTION_MINUTES", "30"))  # frames older than this are deleted
 RETENTION_CHECK_SECONDS = 60  # how often the cleanup runs
+
+# ---------- Languages ----------
+LANGUAGES = ("en", "fr", "ar")
+DEFAULT_LANGUAGE = "en"     # used until the first question tells us the user's language
+
+# ---------- AI model files ----------
+MODELS_DIR = SERVER_DIR / "models"   # YOLO-World, CLIP and EasyOCR weights (downloaded, not in Git)
+EASYOCR_DIR = MODELS_DIR / "easyocr"
+
+# ---------- OCR (EasyOCR, CPU) ----------
+# One reader per language. en and fr share a reader; Arabic needs its own (EasyOCR can't mix them).
+OCR_READERS = {"en": ["en", "fr"], "fr": ["en", "fr"], "ar": ["ar", "en"]}
+OCR_MIN_CONF = 0.3          # ignore text pieces EasyOCR is less sure about
+
+# ---------- Object detection (YOLO-World, CPU) ----------
+YOLO_MODEL = "yolov8s-worldv2.pt"  # base model, downloaded into MODELS_DIR the first time
+YOLO_MIN_CONF = 0.25        # ignore weaker detections (YOLO-World scores are lower than normal YOLO)
+YOLO_IMAGE_SIZE = 640       # input size; smaller = faster, less accurate
+# Our own vocabulary (normal COCO YOLO has no "door" or "stairs"). No face recognition: labels only.
+YOLO_CLASSES = [
+    "door", "stairs", "person", "chair", "table", "exit sign", "elevator", "car",
+    "bicycle", "bus", "traffic light", "stop sign", "bench", "trash can", "window",
+    "sign", "pole", "escalator", "toilet", "sink", "laptop", "bottle", "cup", "bag",
+]
+
+# ---------- Embeddings ----------
+# 384 dimensions (matches vector(384)). Loaded from MODELS_DIR/<name>/ if present, else from Hugging Face.
+EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+# ---------- Vision worker ----------
+VISION_QUEUE_MAX = 5        # frames waiting for OCR/YOLO; when full, the OLDEST waiting one is skipped

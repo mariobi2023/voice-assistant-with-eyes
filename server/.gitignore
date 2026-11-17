@@ -8,3 +8,6 @@ __pycache__/
 
 # Saved camera frames (private, deleted automatically, never committed)
 frames/
+
+# Downloaded AI model weights (large; downloaded automatically)
+models/

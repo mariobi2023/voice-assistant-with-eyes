@@ -1,14 +1,33 @@
-# Backend dependencies. Install inside the virtual environment:
-#   pip install -r requirements.txt
+# Backend dependencies. Install inside the virtual environment, IN THIS ORDER:
+#   1) CPU-only PyTorch (no CUDA, ~115 MB):
+#        pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cpu
+#   2) CLIP (used once by YOLO-World to read our class names; not on PyPI):
+#        pip install git+https://github.com/ultralytics/CLIP.git
+#      (if git reports an SSL certificate error on Windows, add:  -c http.sslBackend=schannel  via
+#       git clone, then  pip install <cloned folder>)
+#   3) Everything else:
+#        pip install -r requirements.txt
 # More packages are added at each build step.
 
 # --- Step 1: ingest (read the stream, pick good frames) ---
-opencv-python==4.10.0.84   # read RTSP, image maths (sharpness, brightness), save JPEG
-numpy<2.1                  # arrays used by OpenCV
-Pillow==10.4.0             # image format needed by imagehash
-ImageHash==4.3.1           # perceptual hash (pHash) to skip near-duplicate frames
-python-dotenv==1.0.1       # load settings and secrets from server/.env
+# Ultralytics needs "opencv-python" and EasyOCR needs "opencv-python-headless". Both install the
+# same "cv2" module, so they MUST have the same version or cv2 breaks.
+opencv-python==5.0.0.93          # read RTSP, image maths (sharpness, brightness), save JPEG
+opencv-python-headless==5.0.0.93
+numpy==2.5.5                     # arrays used by OpenCV / PyTorch
+Pillow==10.4.0                   # image format needed by imagehash
+ImageHash==4.3.1                 # perceptual hash (pHash) to skip near-duplicate frames
+python-dotenv==1.0.1             # load settings and secrets from server/.env
+truststore==0.10.5               # use the Windows certificate store for HTTPS (fixes SSL errors)
 
 # --- Step 2: database ---
-psycopg[binary]==3.2.3     # PostgreSQL driver
-psycopg-pool==3.2.4        # connection pool shared by the background threads and web requests
+psycopg[binary]==3.2.3           # PostgreSQL driver
+psycopg-pool==3.2.4              # connection pool shared by the background threads and web requests
+
+# --- Step 3: vision + embeddings (CPU) ---
+torch==2.10.0                    # installed in step 1) above from the CPU-only index
+torchvision==0.25.0
+easyocr==1.7.2                   # OCR for English, French and Arabic
+ultralytics==8.4.215             # YOLO-World object detection with our own class list
+sentence-transformers==6.3.0     # multilingual text embeddings (384 dims)
+pgvector==0.5.1                  # store/read numpy vectors in PostgreSQL "vector" columns
