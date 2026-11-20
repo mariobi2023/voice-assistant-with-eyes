@@ -36,4 +36,5 @@ pgvector==0.5.1                  # store/read numpy vectors in PostgreSQL "vecto
 fastapi==0.141.1                 # the web API (/ask, /status, ...) with automatic /docs page
 uvicorn[standard]==0.54.0        # the web server that runs FastAPI
 google-genai==3.4.0              # Gemini API (answer model)
+httpx==0.28.1                    # HTTP client used by google-genai (we turn off connection reuse)
 requests==2.34.2                 # HTTP calls to the local Ollama fallback

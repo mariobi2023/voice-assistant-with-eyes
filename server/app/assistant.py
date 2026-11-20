@@ -12,8 +12,10 @@ import logging
 import re
 import sys
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 import cv2
+import httpx
 import requests
 
 from app import config, db, embeddings, vision
@@ -25,6 +27,7 @@ log = logging.getLogger("assistant")
 
 last_model_used = "none"  # shown by GET /status
 _gemini_client = None
+_gemini_pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="gemini")  # parallel copies
 
 SYSTEM_PROMPT = """You help a blind or visually impaired person.
 Answer ONLY from the provided images, OCR text and detected objects. Do not guess.
@@ -138,15 +141,21 @@ def load_jpeg(image_path, max_width=None):
 
 
 def get_gemini_client():
-    """Create the Gemini client once. No automatic retries: on error we go to Ollama at once."""
+    """Create the Gemini client once.
+    - max_keepalive_connections=0: a NEW connection for every request. Reused connections
+      were silently dropped by the network and the request never got an answer.
+    - no automatic SDK retries: ask_gemini_first_answer() decides when to send again."""
     global _gemini_client
     if _gemini_client is None:
         from google import genai
         from google.genai import types
         _gemini_client = genai.Client(
             api_key=config.GEMINI_API_KEY,
-            http_options=types.HttpOptions(timeout=config.GEMINI_TIMEOUT_SECONDS * 1000,
-                                           retry_options=types.HttpRetryOptions(attempts=1)),
+            http_options=types.HttpOptions(
+                timeout=config.GEMINI_REQUEST_TIMEOUT_SECONDS * 1000,
+                retry_options=types.HttpRetryOptions(attempts=1),
+                client_args={"limits": httpx.Limits(max_keepalive_connections=0)},
+            ),
         )
     return _gemini_client
 
@@ -165,6 +174,35 @@ def ask_gemini(system_prompt, user_text, images):
                                            thinking_config=thinking),
     )
     return response.text
+
+
+def ask_gemini_first_answer(system_prompt, user_text, images, stop_at):
+    """Send the request; if no answer after GEMINI_RESEND_AFTER_SECONDS, send a copy (up to
+    GEMINI_MAX_COPIES) and return the FIRST good answer. Some requests get lost and never
+    answer, and waiting for them would make the phone time out. Returns None if nothing
+    arrived before `stop_at`. Requests still running finish on their own in the background."""
+    waiting = set()
+    for copy in range(1, config.GEMINI_MAX_COPIES + 1):
+        waiting.add(_gemini_pool.submit(ask_gemini, system_prompt, user_text, images))
+        is_last = copy == config.GEMINI_MAX_COPIES
+        wait_until = stop_at if is_last else min(stop_at, time.monotonic() + config.GEMINI_RESEND_AFTER_SECONDS)
+        while waiting and time.monotonic() < wait_until:
+            done, waiting = wait(waiting, timeout=wait_until - time.monotonic(), return_when=FIRST_COMPLETED)
+            for request in done:
+                try:
+                    answer = request.result()
+                except Exception as error:  # e.g. 429 rate limit: this copy failed
+                    log.warning("Gemini request %d failed (%s)", copy, str(error)[:200])
+                    continue
+                if answer and answer.strip():
+                    if copy > 1:
+                        log.info("Gemini answered after sending %d copies", copy)
+                    return answer.strip()
+        if time.monotonic() >= stop_at:
+            break
+        if not is_last:
+            log.info("No answer from Gemini yet, sending copy %d", copy + 1)
+    return None
 
 
 def ask_ollama(system_prompt, user_text, images, timeout):
@@ -197,15 +235,13 @@ def generate_answer(question, language, frames, deadline):
                  f"Question (answer in {LANGUAGE_NAMES[language]}): {question}")
 
     if config.GEMINI_API_KEY:
-        try:
-            images = [load_jpeg(f["image_path"]) for f in frames]
-            answer = ask_gemini(system_prompt, user_text, images)
-            if answer and answer.strip():
-                last_model_used = config.GEMINI_MODEL
-                return answer.strip(), config.GEMINI_MODEL
-            log.warning("Gemini returned an empty answer")
-        except Exception as error:
-            log.warning("Gemini failed (%s), trying Ollama", str(error)[:200])
+        images = [load_jpeg(f["image_path"]) for f in frames]
+        stop_at = min(deadline, time.monotonic() + config.GEMINI_BUDGET_SECONDS)
+        answer = ask_gemini_first_answer(system_prompt, user_text, images, stop_at)
+        if answer:
+            last_model_used = config.GEMINI_MODEL
+            return answer, config.GEMINI_MODEL
+        log.warning("Gemini did not answer, trying Ollama")
     else:
         log.warning("GEMINI_API_KEY is not set, trying Ollama")
 

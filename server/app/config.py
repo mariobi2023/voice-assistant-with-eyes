@@ -83,9 +83,17 @@ MIN_SIMILARITY = 0.20
 ANSWER_DEADLINE_SECONDS = 12
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")  # secret: set it in .env
 # Check which models YOUR key can use with:  python -m app.assistant --list-models
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
-GEMINI_THINKING_LEVEL = "minimal"  # least "thinking" = fastest answer (set None for models without it)
-GEMINI_TIMEOUT_SECONDS = 8  # then fall back to Ollama with the time that is left
+# Tested 2026-11-20: flash-lite answers in 1.4-3 s; 3.5-flash and 3.8-flash took > 10 s (too slow).
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+GEMINI_THINKING_LEVEL = "minimal"  # least "thinking" = fastest answer (not supported by gemini-3.8-flash)
+# Measured 2026-11-20: requests sent on a REUSED connection got lost (the network silently
+# closes idle connections), so each request opens a new connection (answer in ~2-3 s).
+# A few requests still get lost: if no answer after GEMINI_RESEND_AFTER_SECONDS we send the
+# same request again and keep whichever answer arrives first.
+GEMINI_REQUEST_TIMEOUT_SECONDS = 10  # one request; Google rejects deadlines under 10 s
+GEMINI_RESEND_AFTER_SECONDS = 4
+GEMINI_MAX_COPIES = 2       # each copy counts against the free-tier rate limit
+GEMINI_BUDGET_SECONDS = 9   # stop waiting for Gemini after this (then Ollama gets the time left)
 # 127.0.0.1, not "localhost": on Windows "localhost" tries IPv6 first, which doubles the wait
 # when Ollama is not running.
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
