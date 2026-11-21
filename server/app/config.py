@@ -24,8 +24,8 @@ FREEZE_SECONDS = 2.0        # picture 100% identical this long = decoder stuck �
 SUPPORTED_CODECS = ("H264", "VP8", "VP9")
 
 # ---------- Frame selection ----------
-SHARPNESS_MIN = 100.0       # Laplacian variance; below this the frame is too blurry → drop
-HASH_MIN = 10               # pHash distance to the last kept frame; below this = same scene → drop
+SHARPNESS_MIN = 10.0       # Laplacian variance; below this the frame is too blurry → drop
+HASH_MIN = 5               # pHash distance to the last kept frame; below this = same scene → drop
 DARK_MAX = 60.0             # mean brightness (0-255) below which a frame counts as "dark"
 
 # ---------- Storage ----------
