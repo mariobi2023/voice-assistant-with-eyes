@@ -22,6 +22,7 @@ from pathlib import Path
 
 import cv2
 import imagehash
+import numpy as np
 from PIL import Image
 
 from app import config, db, embeddings, retention, vision
@@ -127,6 +128,8 @@ class Ingestor:
         self.stream_connected = False  # shown by GET /status
         self.fps = 0.0                 # frames checked per second, shown by GET /status
         self._last_hash = None         # pHash of the last kept frame
+        self._prev_frame = None        # last checked frame, to detect a frozen video
+        self._frozen_since = None      # time the picture stopped changing (None = it changes)
         self._stop_event = threading.Event()
         self._thread = None
 
@@ -142,23 +145,45 @@ class Ingestor:
             self._thread.join(timeout=config.READ_TIMEOUT_MS / 1000 + 1)
 
     def _run(self):
-        """Outer loop: connect, read until the stream drops, wait, reconnect."""
+        """Outer loop: connect, read until the stream drops (or freezes), reconnect."""
         while not self._stop_event.is_set():
+            frozen = False
             cap = open_stream(config.RTSP_URL)
             if not cap.isOpened():
                 explain_open_failure(config.RTSP_URL)
             else:
                 log.info("Connected to %s", config.RTSP_URL)
                 self.stream_connected = True
-                self._read_loop(cap)
-                log.warning("Stream lost, reconnecting in %.0f s", config.RECONNECT_SECONDS)
+                self._prev_frame, self._frozen_since = None, None
+                frozen = self._read_loop(cap) == "frozen"
+                if not frozen:
+                    log.warning("Stream lost, reconnecting in %.0f s", config.RECONNECT_SECONDS)
             cap.release()
+            if frozen:
+                continue  # the stream is still there: reconnect at once
             self.stream_connected = False
             self.fps = 0.0
             self._stop_event.wait(config.RECONNECT_SECONDS)
 
+    def _is_frozen(self, frame, now):
+        """True if the picture has not changed AT ALL for FREEZE_SECONDS.
+        A live camera never gives two pixel-identical frames (sensor noise), so this means
+        OpenCV's decoder is stuck. It happens when the browser/phone changes the video
+        resolution (e.g. 640x360 → 1280x720) a few seconds after it starts sending:
+        OpenCV keeps returning the old picture. A new connection gets the new size."""
+        same = (self._prev_frame is not None and frame.shape == self._prev_frame.shape
+                and np.array_equal(frame, self._prev_frame))
+        self._prev_frame = frame
+        if not same:
+            self._frozen_since = None
+            return False
+        if self._frozen_since is None:
+            self._frozen_since = now
+        return now - self._frozen_since >= config.FREEZE_SECONDS
+
     def _read_loop(self, cap):
-        """Inner loop: read every frame (so we never lag behind), but only check SAMPLE_FPS per second."""
+        """Inner loop: read every frame (so we never lag behind), but only check SAMPLE_FPS per second.
+        Returns "frozen" if the video froze, None if the stream ended."""
         interval = 1.0 / config.SAMPLE_FPS
         next_check = time.monotonic()
         checked, window_start = 0, time.monotonic()
@@ -174,6 +199,10 @@ class Ingestor:
 
             ok, frame = cap.retrieve()  # convert the grabbed frame into an image
             if ok and frame is not None:
+                if self._is_frozen(frame, now):
+                    log.warning("Video frozen for %.0f s (sender probably changed resolution), reconnecting",
+                                config.FREEZE_SECONDS)
+                    return "frozen"
                 self.process_frame(frame)
                 checked += 1
 

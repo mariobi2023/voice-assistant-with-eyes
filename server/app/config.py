@@ -18,6 +18,7 @@ SAMPLE_FPS = 2.0            # how many frames per second we check (the rest are 
 RECONNECT_SECONDS = 3.0     # wait before retrying when the stream is missing or drops
 OPEN_TIMEOUT_MS = 5000      # give up opening the stream after 5 s (then retry)
 READ_TIMEOUT_MS = 5000      # a read that hangs longer than 5 s = stream lost
+FREEZE_SECONDS = 2.0        # picture 100% identical this long = decoder stuck → reconnect
 # Video codecs OpenCV's built-in FFmpeg can read over RTSP. NOT AV1 (Chrome's browser test
 # page may choose it: pick H264 or VP8 there).
 SUPPORTED_CODECS = ("H264", "VP8", "VP9")
