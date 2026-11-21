@@ -33,6 +33,17 @@ FRAMES_DIR = SERVER_DIR / "frames"  # JPEG files of kept frames
 FRAME_MAX_WIDTH = 960       # resize wider frames before saving (smaller files, faster OCR later)
 JPEG_QUALITY = 85           # 0-100, JPEG compression quality
 
+# ---------- Privacy: blur faces before saving (detection only, NO recognition) ----------
+BLUR_FACES = True           # blur every detected face before the JPEG is written
+FACE_MODEL_FILE = "face_detection_yunet_2023mar.onnx"  # OpenCV's YuNet detector, saved in MODELS_DIR
+FACE_MODEL_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
+                  "face_detection_yunet/face_detection_yunet_2023mar.onnx")
+# Lower = blurs more faces but also random patches (which could hide sign text from OCR).
+# Tested on sample photos: real faces scored 0.90-0.94, a false alarm 0.61.
+FACE_MIN_CONF = 0.7
+FACE_BLUR_MARGIN = 0.08     # enlarge each face box by 8% on every side (just enough for the chin)
+FACE_PIXEL_BLOCKS = 6       # face is shrunk to ~6 pixels across before blurring (no details left)
+
 # ---------- Database ----------
 DATABASE_URL = os.getenv("DATABASE_URL", "")  # secret (contains the password): set it in .env
 DB_POOL_SIZE = 5            # max connections shared by ingest, retention and web requests
@@ -76,6 +87,10 @@ VISION_QUEUE_MAX = 5        # frames waiting for OCR/YOLO; when full, the OLDEST
 
 # ---------- Assistant: retrieval ("which frames answer the question?") ----------
 NOW_MAX_AGE_SECONDS = 5     # "what is in front of me": newest frame older than this → "I'm not sure"
+# "What is in front of me" uses the LIVE frame (last one read from the stream, stored on demand),
+# so it works even when the camera is still and no new frame was kept. Last read older than
+# this = stream stopped → fall back to the newest stored frame.
+LIVE_FRAME_MAX_AGE_SECONDS = 2
 SEARCH_WINDOW_SECONDS = 180  # "just passed" / "what did the sign say": look back this far
 TOP_K_FRAMES = 3            # max frames sent to the answer model
 # Best cosine similarity below this → "I'm not sure". Measured in step 3: real matches scored
@@ -95,9 +110,15 @@ GEMINI_THINKING_LEVEL = "minimal"  # least "thinking" = fastest answer (not supp
 # A few requests still get lost: if no answer after GEMINI_RESEND_AFTER_SECONDS we send the
 # same request again and keep whichever answer arrives first.
 GEMINI_REQUEST_TIMEOUT_SECONDS = 10  # one request; Google rejects deadlines under 10 s
-GEMINI_RESEND_AFTER_SECONDS = 4
+GEMINI_RESEND_AFTER_SECONDS = 5  # not sooner: on a slow upload a 2nd copy slows the 1st one down
 GEMINI_MAX_COPIES = 2       # each copy counts against the free-tier rate limit
 GEMINI_BUDGET_SECONDS = 9   # stop waiting for Gemini after this (then Ollama gets the time left)
+# The upload speed is the bottleneck. Measured with the same photo: 134 KB → 9.9 s,
+# 73 KB → 6-24 s, 43 KB (384 px) → 3.4-5.5 s, with the same correct answer. So images are
+# shrunk to 384 px and only the most relevant ones are sent (others go as text: OCR + objects).
+GEMINI_IMAGE_WIDTH = 384
+MODEL_JPEG_QUALITY = 70     # JPEG quality of images sent to Gemini/Ollama
+MAX_IMAGES_PER_QUESTION = 2
 # 127.0.0.1, not "localhost": on Windows "localhost" tries IPv6 first, which doubles the wait
 # when Ollama is not running.
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")

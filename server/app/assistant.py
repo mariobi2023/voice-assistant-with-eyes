@@ -19,7 +19,7 @@ import httpx
 import requests
 
 from app import config, db, embeddings, vision
-from app.ingest import resize_to_max_width
+from app.ingest import capture_live_frame, resize_to_max_width
 from app.languages import (LANGUAGE_NAMES, NOT_SURE, ROUTE_KEYWORDS, SAFE_PATTERNS, STOPWORDS,
                            normalize_language, not_sure)
 
@@ -75,8 +75,13 @@ def keywords_for_ocr(question, language):
 # enough to answer, or a key of NOT_SURE_REASONS when we must say "I'm not sure".
 
 def retrieve_now():
-    """Newest frame only, and only if it is fresh (the scene may have changed)."""
-    frame = db.newest_frame()
+    """The current LIVE picture (stored right now, so it is a normal frame with an id).
+    If the stream gives none, the newest stored frame, and only if it is fresh."""
+    frame = capture_live_frame()
+    if frame is not None:
+        frame["analyzed"] = False  # stored a moment ago: OCR/YOLO have not run on it yet
+    else:
+        frame = db.newest_frame()
     if frame is None or frame["age_seconds"] > config.NOW_MAX_AGE_SECONDS:
         return [], 0.1, "no_recent"
     return [frame], 0.8, None
@@ -121,23 +126,28 @@ def retrieve(route, question, language):
 # ---------- 3. Generate ----------
 
 def describe_frames(frames):
-    """Text evidence for the model: when each frame was seen, its OCR text and objects."""
+    """Text evidence for the model: when each frame was seen, its OCR text and objects.
+    Only the first MAX_IMAGES_PER_QUESTION frames are sent as images; the others as text only."""
     lines = []
-    for f in frames:
+    for i, f in enumerate(frames):
+        has_image = "image attached" if i < config.MAX_IMAGES_PER_QUESTION else "text only, no image"
+        start = f'Frame {f["id"]} ({has_image}, seen {f["age_seconds"]:.0f} seconds ago): '
+        # A live frame was stored a moment ago: its ocr_text/caption are still '' because
+        # vision has not run yet, which does NOT mean "nothing there". Let the model look.
+        if f.get("analyzed") is False:
+            lines.append(start + "not analyzed yet, use the image itself.")
+            continue
         text = f'"{f["ocr_text"]}"' if f["ocr_text"] else "none"
         objects = f["caption"] or "none"
-        lines.append(f'Image {f["id"]} (seen {f["age_seconds"]:.0f} seconds ago): '
-                     f"text read: {text}; objects detected: {objects}.")
+        lines.append(start + f"text read: {text}; objects detected: {objects}.")
     return "\n".join(lines)
 
 
-def load_jpeg(image_path, max_width=None):
-    """Read a stored frame as JPEG bytes, optionally made smaller first."""
-    full_path = config.SERVER_DIR / image_path
-    if max_width is None:
-        return full_path.read_bytes()
-    image = resize_to_max_width(cv2.imread(str(full_path)), max_width)
-    return cv2.imencode(".jpg", image)[1].tobytes()
+def load_jpeg(image_path, max_width):
+    """Read a stored frame as JPEG bytes, made at most `max_width` pixels wide.
+    Smaller uploads = faster answers, and fewer requests lost on a weak connection."""
+    image = resize_to_max_width(cv2.imread(str(config.SERVER_DIR / image_path)), max_width)
+    return cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, config.MODEL_JPEG_QUALITY])[1].tobytes()
 
 
 def get_gemini_client():
@@ -235,7 +245,8 @@ def generate_answer(question, language, frames, deadline):
                  f"Question (answer in {LANGUAGE_NAMES[language]}): {question}")
 
     if config.GEMINI_API_KEY:
-        images = [load_jpeg(f["image_path"]) for f in frames]
+        images = [load_jpeg(f["image_path"], config.GEMINI_IMAGE_WIDTH)
+                  for f in frames[:config.MAX_IMAGES_PER_QUESTION]]  # most relevant first
         stop_at = min(deadline, time.monotonic() + config.GEMINI_BUDGET_SECONDS)
         answer = ask_gemini_first_answer(system_prompt, user_text, images, stop_at)
         if answer:
@@ -250,7 +261,7 @@ def generate_answer(question, language, frames, deadline):
         log.warning("No time left for Ollama (%.1f s)", time_left)
         return None, "none"
     try:
-        images = [load_jpeg(f["image_path"], config.OLLAMA_IMAGE_WIDTH) for f in frames]
+        images = [load_jpeg(f["image_path"], config.OLLAMA_IMAGE_WIDTH) for f in frames[:1]]
         answer = ask_ollama(system_prompt, user_text, images, timeout=time_left)
         last_model_used = config.OLLAMA_MODEL
         return answer.strip(), config.OLLAMA_MODEL

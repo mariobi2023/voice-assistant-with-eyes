@@ -17,7 +17,7 @@ import socket
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import cv2
@@ -25,7 +25,7 @@ import imagehash
 import numpy as np
 from PIL import Image
 
-from app import config, db, embeddings, retention, vision
+from app import config, db, embeddings, privacy, retention, vision
 from app.migrate import apply_migrations
 
 log = logging.getLogger("ingest")
@@ -130,6 +130,8 @@ class Ingestor:
         self._last_hash = None         # pHash of the last kept frame
         self._prev_frame = None        # last checked frame, to detect a frozen video
         self._frozen_since = None      # time the picture stopped changing (None = it changes)
+        self._latest = None            # (frame, time) of the last frame read: the LIVE picture
+        self._keep_lock = threading.Lock()  # ingest thread and /ask both keep frames: one at a time
         self._stop_event = threading.Event()
         self._thread = None
 
@@ -203,6 +205,8 @@ class Ingestor:
                     log.warning("Video frozen for %.0f s (sender probably changed resolution), reconnecting",
                                 config.FREEZE_SECONDS)
                     return "frozen"
+                # A copy, because process_frame may blur faces in `frame` in place.
+                self._latest = (frame.copy(), now)
                 self.process_frame(frame)
                 checked += 1
 
@@ -211,9 +215,28 @@ class Ingestor:
                 self.fps = round(checked / (now - window_start), 1)
                 checked, window_start = 0, now
 
-    def process_frame(self, frame):
-        """Run the selection checks on one frame. Returns info about the kept frame, or None if dropped."""
-        captured_at = datetime.now(timezone.utc)
+    def keep_live_frame(self):
+        """For "what is in front of me": store the latest frame read from the stream, even if
+        it looks like the last kept frame (when the camera is still, nothing new is kept).
+        Returns the info of the stored frame, or None if there is no fresh live frame."""
+        latest = self._latest
+        if latest is None:
+            return None
+        frame, seen_at = latest
+        age = time.monotonic() - seen_at
+        if age > config.LIVE_FRAME_MAX_AGE_SECONDS:
+            return None  # stream stopped: the "live" picture is old
+        captured_at = datetime.now(timezone.utc) - timedelta(seconds=age)
+        return self.process_frame(frame.copy(), captured_at=captured_at, live=True)
+
+    def process_frame(self, frame, captured_at=None, live=False):
+        """Run the selection checks on one frame. Returns info about the kept frame, or None if dropped.
+        live=True (asked by /ask) skips the "same scene" check: the user wants the picture NOW."""
+        with self._keep_lock:
+            return self._select_and_keep(frame, captured_at or datetime.now(timezone.utc), live)
+
+    def _select_and_keep(self, frame, captured_at, live):
+        """The checks + saving (see process_frame). Runs under _keep_lock."""
         frame = resize_to_max_width(frame, config.FRAME_MAX_WIDTH)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
@@ -225,11 +248,19 @@ class Ingestor:
 
         # Check 2: new scene? (subtracting two hashes gives the number of different bits)
         frame_hash = compute_phash(frame)
-        if self._last_hash is not None:
+        if self._last_hash is not None and not live:
             distance = frame_hash - self._last_hash
             if distance < config.HASH_MIN:
                 log.info("Frame dropped: same scene (hash distance %d < %d)", distance, config.HASH_MIN)
                 return None
+
+        # Privacy: blur faces BEFORE anything is written to disk or the database.
+        # If blurring fails we drop the frame: never store an unblurred face.
+        try:
+            faces = privacy.blur_faces(frame)
+        except Exception:
+            log.exception("Frame dropped: face blurring failed")
+            return None
 
         # Kept: save it and remember its hash for the next comparison.
         brightness = measure_brightness(gray)
@@ -242,7 +273,8 @@ class Ingestor:
             "brightness": brightness,
             "is_dark": brightness < config.DARK_MAX,  # used for enhancement in a later step
         }
-        log.info("Frame kept: %s (sharpness %.0f, brightness %.0f)", image_path, sharpness, brightness)
+        log.info("Frame kept%s: %s (sharpness %.0f, brightness %.0f, %d face(s) blurred)",
+                 " (live, for a question)" if live else "", image_path, sharpness, brightness, faces)
 
         if self.on_frame_kept:
             try:
@@ -316,12 +348,31 @@ class VisionWorker:
 
 # ---------- Starting everything together ----------
 
+_running_ingestor = None  # set by start_pipeline()
+
+
+def capture_live_frame():
+    """Store the current live picture and return its database row (same keys as db.newest_frame),
+    or None if the stream gives no fresh frame or it could not be stored.
+    Used by the assistant for "what is in front of me?"."""
+    if _running_ingestor is None:
+        return None
+    info = _running_ingestor.keep_live_frame()
+    if not info or "id" not in info:  # dropped (blurry / face blur failed) or database error
+        return None
+    return db.get_frame(info["id"])
+
 def start_pipeline():
     """Start ingest + vision + retention threads. Returns a function that stops them all.
     Used by `python -m app.ingest` now and by main.py (the web server) from step 4."""
     apply_migrations()  # make sure the tables exist
     stop_event = threading.Event()
     retention.start_retention_thread(stop_event)
+
+    try:
+        privacy.get_face_detector()  # load (or download) now, so the first frame is not slow
+    except Exception:
+        log.exception("Face detector not available: frames will be dropped until it loads")
 
     vision_worker = VisionWorker()
     vision_worker.start()  # loads the models (can take ~30 s the first time: downloads)
@@ -332,8 +383,10 @@ def start_pipeline():
         log.info("Frame stored in database with id %d", info["id"])
         vision_worker.submit(info["id"], frame)
 
+    global _running_ingestor
     ingestor = Ingestor(on_frame_kept=store_and_queue)
     ingestor.start()
+    _running_ingestor = ingestor  # so capture_live_frame() (used by /ask) can reach it
 
     def stop_pipeline():
         stop_event.set()

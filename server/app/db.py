@@ -102,6 +102,12 @@ def newest_frame():
     return rows[0] if rows else None
 
 
+def get_frame(frame_id):
+    """One frame by id, or None. Used for the live frame stored for 'what is in front of me?'."""
+    rows = _fetch_dicts(f"SELECT {_FRAME_COLUMNS} FROM frames WHERE id = %s", (frame_id,))
+    return rows[0] if rows else None
+
+
 def search_similar(query_vec, seconds, limit):
     """Frames from the last `seconds`, closest in MEANING to the question (cosine similarity)."""
     return _fetch_dicts(
@@ -152,6 +158,37 @@ def insert_qa(language, question, answer, frame_ids, confidence, latency_ms):
             (language, question, answer, frame_ids, confidence, latency_ms),
         ).fetchone()
     return row[0]
+
+
+# ---------- Dashboard lists ----------
+
+def list_frames(start=None, end=None, limit=200):
+    """Stored frames for the timeline, OLDEST first (all columns except the embedding).
+    start/end (optional datetimes) limit the time range; `limit` keeps only the newest ones."""
+    return _fetch_dicts(
+        """SELECT * FROM (
+               SELECT id, captured_at, image_path, ocr_text, ocr_conf, objects, caption,
+                      sharpness, brightness, enhanced
+               FROM frames
+               WHERE (%(start)s::timestamptz IS NULL OR captured_at >= %(start)s)
+                 AND (%(end)s::timestamptz IS NULL OR captured_at <= %(end)s)
+               ORDER BY captured_at DESC
+               LIMIT %(limit)s
+           ) newest
+           ORDER BY captured_at ASC""",
+        {"start": start, "end": end, "limit": limit},
+    )
+
+
+def list_qa(limit=100):
+    """Past questions and answers, NEWEST first."""
+    return _fetch_dicts(
+        """SELECT id, asked_at, language, question, answer, frame_ids, confidence, latency_ms
+           FROM qa_log
+           ORDER BY asked_at DESC
+           LIMIT %s""",
+        (limit,),
+    )
 
 
 def delete_frames_older_than(minutes):
