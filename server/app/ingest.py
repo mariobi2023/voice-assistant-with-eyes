@@ -13,6 +13,7 @@ Test on its own:   python -m app.ingest   (ingest + vision + database + retentio
 import logging
 import os
 import queue
+import socket
 import sys
 import threading
 import time
@@ -42,6 +43,42 @@ def open_stream(url):
         cv2.CAP_PROP_READ_TIMEOUT_MSEC, config.READ_TIMEOUT_MS,
     ]
     return cv2.VideoCapture(url, cv2.CAP_FFMPEG, params)
+
+
+def find_video_codec(url):
+    """Ask the RTSP server which video codec the stream uses (RTSP "DESCRIBE" request).
+    Returns e.g. "H264", "VP8", "AV1", or None if there is no stream. Only used to explain
+    WHY OpenCV could not open the stream in the log."""
+    try:
+        host_port = url.split("//", 1)[1].split("/", 1)[0]
+        host, _, port = host_port.partition(":")
+        with socket.create_connection((host, int(port or 554)), timeout=3) as sock:
+            sock.sendall(f"DESCRIBE {url} RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n\r\n".encode())
+            reply = sock.recv(8192).decode(errors="replace")
+    except OSError:
+        return None
+    in_video = False
+    for line in reply.splitlines():  # SDP: "m=video ..." then "a=rtpmap:96 AV1/90000"
+        if line.startswith("m="):
+            in_video = line.startswith("m=video")
+        elif in_video and line.startswith("a=rtpmap:"):
+            return line.split()[1].split("/")[0].upper()
+    return None
+
+
+def explain_open_failure(url):
+    """Log the real reason the stream could not be opened."""
+    codec = find_video_codec(url)
+    if codec is None:
+        log.warning("No stream at %s (is the phone/browser publishing?), retrying in %.0f s",
+                    url, config.RECONNECT_SECONDS)
+    elif codec not in config.SUPPORTED_CODECS:
+        log.warning("Stream found but its video codec is %s, which OpenCV cannot read. "
+                    "Publish with %s instead. Retrying in %.0f s",
+                    codec, " or ".join(config.SUPPORTED_CODECS), config.RECONNECT_SECONDS)
+    else:
+        log.warning("Stream found (%s) but OpenCV could not open it yet, retrying in %.0f s",
+                    codec, config.RECONNECT_SECONDS)
 
 
 def resize_to_max_width(frame, max_width):
@@ -109,7 +146,7 @@ class Ingestor:
         while not self._stop_event.is_set():
             cap = open_stream(config.RTSP_URL)
             if not cap.isOpened():
-                log.warning("No stream at %s, retrying in %.0f s", config.RTSP_URL, config.RECONNECT_SECONDS)
+                explain_open_failure(config.RTSP_URL)
             else:
                 log.info("Connected to %s", config.RTSP_URL)
                 self.stream_connected = True
