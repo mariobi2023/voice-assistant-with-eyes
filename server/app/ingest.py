@@ -18,7 +18,6 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import cv2
 import imagehash
@@ -122,8 +121,8 @@ class Ingestor:
     """Background thread: stream → frame selection → JPEG on disk."""
 
     def __init__(self, on_frame_kept=None):
-        # Called as on_frame_kept(frame, info) for every kept frame.
-        # Later steps plug the database / OCR / YOLO in here.
+        # Called as on_frame_kept(frame, info) for every kept frame
+        # (store_and_queue in start_pipeline: database row + OCR/YOLO queue).
         self.on_frame_kept = on_frame_kept
         self.stream_connected = False  # shown by GET /status
         self.fps = 0.0                 # frames checked per second, shown by GET /status
@@ -271,7 +270,7 @@ class Ingestor:
             "image_path": image_path,
             "sharpness": sharpness,
             "brightness": brightness,
-            "is_dark": brightness < config.DARK_MAX,  # used for enhancement in a later step
+            "is_dark": brightness < config.DARK_MAX,  # not used yet: for dark-image enhancement
         }
         log.info("Frame kept%s: %s (sharpness %.0f, brightness %.0f, %d face(s) blurred)",
                  " (live, for a question)" if live else "", image_path, sharpness, brightness, faces)
@@ -291,7 +290,7 @@ class Ingestor:
 class VisionWorker:
     """Second background thread: analyzes stored frames one by one.
 
-    OCR takes 1-3 s per frame on a CPU. Doing it here, not in the Ingestor thread,
+    OCR takes 2-8 s per frame on a CPU. Doing it here, not in the Ingestor thread,
     means slow OCR never makes us fall behind the live stream, and never blocks /ask.
     """
 
@@ -362,9 +361,10 @@ def capture_live_frame():
         return None
     return db.get_frame(info["id"])
 
+
 def start_pipeline():
-    """Start ingest + vision + retention threads. Returns a function that stops them all.
-    Used by `python -m app.ingest` now and by main.py (the web server) from step 4."""
+    """Start ingest + vision + retention threads. Returns (ingestor, stop_pipeline function).
+    Used by main.py (the web server) and by `python -m app.ingest` (test without the API)."""
     apply_migrations()  # make sure the tables exist
     stop_event = threading.Event()
     retention.start_retention_thread(stop_event)

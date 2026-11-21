@@ -4,7 +4,7 @@ Model: sentence-transformers "paraphrase-multilingual-MiniLM-L12-v2". It is mult
 so an Arabic or French question lands close to a frame whose text/objects are in English.
 Vectors are normalized (length 1), so cosine similarity = how close two meanings are (0..1).
 
-Used twice: for each frame (OCR text + object labels) and for each question (step 4).
+Used twice: for each frame (OCR text + object labels) and for each question (assistant.py).
 """
 import logging
 import threading

@@ -4,7 +4,6 @@ A connection pool is shared by the threads (ingest, retention, web requests):
 each function borrows a connection, runs its query and gives it back.
 `with pool.connection()` commits on success and rolls back on error.
 """
-import logging
 import threading
 
 from pgvector.psycopg import register_vector
@@ -13,8 +12,6 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from app import config
-
-log = logging.getLogger("db")
 
 _pool = None
 _pool_lock = threading.Lock()  # two threads must not create two pools at the same time
@@ -97,7 +94,7 @@ def _fetch_dicts(sql, params):
 
 
 def newest_frame():
-    """The most recent frame, or None. Used for 'what is in front of me now?'."""
+    """The most recent frame, or None. Fallback for 'what is in front of me?' when there is no live frame."""
     rows = _fetch_dicts(f"SELECT {_FRAME_COLUMNS} FROM frames ORDER BY captured_at DESC LIMIT 1", ())
     return rows[0] if rows else None
 

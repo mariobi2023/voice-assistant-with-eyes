@@ -34,11 +34,6 @@ def set_active_language(language):
         _active_language = language
 
 
-def get_active_language():
-    """The language whose OCR reader is used for new frames."""
-    return _active_language
-
-
 # ---------- Model loading ----------
 
 def _reader_key(language):
@@ -53,7 +48,7 @@ def get_ocr_reader(language):
         if key not in _ocr_readers:
             import easyocr  # imported here: it is slow to import and only needed once
             langs = config.OCR_READERS[language]
-            log.info("Loading EasyOCR reader %s (first time downloads the model)...", langs)
+            log.info("Loading EasyOCR reader %s (downloads the model if missing)...", langs)
             config.EASYOCR_DIR.mkdir(parents=True, exist_ok=True)
             _ocr_readers[key] = easyocr.Reader(langs, gpu=False, verbose=False,
                                                model_storage_directory=str(config.EASYOCR_DIR))

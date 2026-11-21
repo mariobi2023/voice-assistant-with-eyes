@@ -11,3 +11,10 @@ frames/
 
 # Downloaded AI model weights (large; downloaded automatically)
 models/
+*.pt
+*.onnx
+*.part
+
+# Logs and tool output
+*.log
+runs/

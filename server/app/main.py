@@ -23,7 +23,7 @@ pipeline = {}    # the running ingestor and the function that stops everything
 @asynccontextmanager
 async def lifespan(app):
     """Start the background threads when the server starts, stop them when it stops."""
-    pipeline["ingestor"], pipeline["stop"] = start_pipeline()  # loads the AI models (~45 s)
+    pipeline["ingestor"], pipeline["stop"] = start_pipeline()  # loads the AI models (~25 s)
     assistant.warm_up()
     yield
     pipeline["stop"]()

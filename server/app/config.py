@@ -24,8 +24,8 @@ FREEZE_SECONDS = 2.0        # picture 100% identical this long = decoder stuck �
 SUPPORTED_CODECS = ("H264", "VP8", "VP9")
 
 # ---------- Frame selection ----------
-SHARPNESS_MIN = 10.0       # Laplacian variance; below this the frame is too blurry → drop
-HASH_MIN = 5               # pHash distance to the last kept frame; below this = same scene → drop
+SHARPNESS_MIN = 10.0        # Laplacian variance; below this the frame is too blurry → drop
+HASH_MIN = 5                # pHash distance to the last kept frame; below this = same scene → drop
 DARK_MAX = 60.0             # mean brightness (0-255) below which a frame counts as "dark"
 
 # ---------- Storage ----------
@@ -54,12 +54,12 @@ DB_TIMEOUT_SECONDS = 5      # wait at most this long for a free connection
 RETENTION_MINUTES = float(os.getenv("RETENTION_MINUTES", "30"))  # frames older than this are deleted
 RETENTION_CHECK_SECONDS = 60  # how often the cleanup runs
 
-# ---------- Languages ----------
-LANGUAGES = ("en", "fr", "ar")
+# ---------- Languages (texts in languages.py) ----------
 DEFAULT_LANGUAGE = "en"     # used until the first question tells us the user's language
 
 # ---------- AI model files ----------
-MODELS_DIR = SERVER_DIR / "models"   # YOLO-World, CLIP and EasyOCR weights (downloaded, not in Git)
+# YOLO-World, CLIP, EasyOCR, MiniLM and face-detector weights (downloaded, not in Git).
+MODELS_DIR = SERVER_DIR / "models"
 EASYOCR_DIR = MODELS_DIR / "easyocr"
 
 # ---------- OCR (EasyOCR, CPU) ----------
@@ -93,8 +93,8 @@ NOW_MAX_AGE_SECONDS = 5     # "what is in front of me": newest frame older than 
 LIVE_FRAME_MAX_AGE_SECONDS = 2
 SEARCH_WINDOW_SECONDS = 180  # "just passed" / "what did the sign say": look back this far
 TOP_K_FRAMES = 3            # max frames sent to the answer model
-# Best cosine similarity below this → "I'm not sure". Measured in step 3: real matches scored
-# 0.25-0.53, unrelated frames 0.04-0.05. Tune on real footage.
+# Best cosine similarity below this → "I'm not sure". Measured on test frames: real matches
+# scored 0.25-0.53, unrelated frames 0.04-0.05. Tune on real footage.
 MIN_SIMILARITY = 0.20
 
 # ---------- Assistant: answer model ----------
