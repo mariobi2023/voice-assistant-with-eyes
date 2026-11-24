@@ -1,11 +1,16 @@
-// Main screen: status text, camera preview, the big Start / Stop button
-// and the big Ask button (AskPanel).
+// Main screen: status text, camera preview, the big Start / Stop button,
+// the big Ask button (AskPanel) and the proactive warnings (WarningClient).
+import 'dart:async';
+
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'ask_panel.dart';
 import 'main.dart' show kAccent, kOk, kWarn;
 import 'settings.dart';
+import 'voice_service.dart';
+import 'warning_client.dart';
 import 'whip_client.dart';
 
 // The four states the screen can be in.
@@ -21,15 +26,26 @@ class StreamScreen extends StatefulWidget {
 class _StreamScreenState extends State<StreamScreen> {
   final _whip = WhipClient();
   final _preview = RTCVideoRenderer(); // shows what the camera sends
+  // One voice for the whole app: answers and warnings share its speech queue.
+  final _voice = VoiceService();
+  late final _warnings = WarningClient(
+    onWarning: _onWarning,
+    onConnectionChanged: (connected) {
+      if (mounted) setState(() => _warningsConnected = connected);
+    },
+  );
   StreamStatus _status = StreamStatus.idle;
   String _errorText = '';
   String _serverIp = '';
+  bool _mock = true;
+  bool _warningsConnected = false;
+  String _lastWarning = '';
 
   @override
   void initState() {
     super.initState();
     _preview.initialize();
-    _loadServerIp();
+    _loadSettings();
 
     // Update the status when the WebRTC connection really connects or drops.
     _whip.onConnectionState = (state) {
@@ -47,14 +63,40 @@ class _StreamScreenState extends State<StreamScreen> {
 
   @override
   void dispose() {
+    _warnings.stop();
+    _voice.stopListening();
+    _voice.stopSpeaking();
     _whip.stop();
     _preview.dispose();
     super.dispose();
   }
 
-  Future<void> _loadServerIp() async {
+  // Read the settings and (re)start the warnings with them (real WebSocket or mock timer).
+  Future<void> _loadSettings() async {
     final settings = await SettingsStore.load();
-    if (mounted) setState(() => _serverIp = settings.serverIp);
+    if (!mounted) return;
+    setState(() {
+      _serverIp = settings.serverIp;
+      _mock = settings.mock;
+    });
+    _warnings.start(settings);
+  }
+
+  // A warning arrived: vibrate strongly, show it, and speak it.
+  // speak() puts it in the queue: if an answer is being spoken, the warning comes right after.
+  void _onWarning(Warning warning) {
+    _vibrateStrongly();
+    setState(() => _lastWarning = warning.text);
+    unawaited(_voice.speak(warning.text, warning.language));
+  }
+
+  // Three vibrations in a row: different from the single buzz of the Ask button,
+  // so the user feels at once that this is a warning.
+  Future<void> _vibrateStrongly() async {
+    for (var i = 0; i < 3; i++) {
+      await HapticFeedback.vibrate();
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
   }
 
   void _showError(String message) {
@@ -87,7 +129,7 @@ class _StreamScreenState extends State<StreamScreen> {
 
   Future<void> _openSettings() async {
     await Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
-    _loadServerIp(); // the IP may have changed
+    _loadSettings(); // IP, language or mock mode may have changed: restart the warnings
   }
 
   // Text and colour for each status.
@@ -97,6 +139,12 @@ class _StreamScreenState extends State<StreamScreen> {
         StreamStatus.live => 'Live',
         StreamStatus.error => 'Error: $_errorText',
       };
+
+  String get _warningsText {
+    if (_mock) return 'Warnings: mock (every 30 s)';
+    if (_serverIp.isEmpty) return 'Warnings: off';
+    return _warningsConnected ? 'Warnings: connected' : 'Warnings: reconnecting…';
+  }
 
   Color get _statusColor => switch (_status) {
         StreamStatus.live => kOk,
@@ -139,6 +187,19 @@ class _StreamScreenState extends State<StreamScreen> {
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 20, color: Colors.white70),
             ),
+            Text(
+              _warningsText,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 20, color: Colors.white70),
+            ),
+            // Last warning on screen for a sighted helper. Not a liveRegion:
+            // TalkBack would read it too, on top of our own voice.
+            if (_lastWarning.isNotEmpty)
+              Text(
+                _lastWarning,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: kWarn),
+              ),
             const SizedBox(height: 16),
 
             // Camera preview (useful for a sighted helper during the demo).
@@ -172,7 +233,7 @@ class _StreamScreenState extends State<StreamScreen> {
             const SizedBox(height: 16),
 
             // Voice: big Ask button + last question/answer.
-            const AskPanel(),
+            AskPanel(voice: _voice),
           ],
         ),
       ),

@@ -1,6 +1,8 @@
 // The big "Ask" button and the last question/answer.
 // One tap: vibrate → listen → vibrate → send question → speak the answer.
 // Works whether or not the camera is streaming (streaming uses no microphone).
+// The VoiceService is shared with the warnings (stream_screen.dart), so answers and
+// warnings go through the same speech queue and never talk over each other.
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:material_ui/material_ui.dart';
 
@@ -10,34 +12,29 @@ import 'main.dart' show kAccent;
 import 'settings.dart';
 import 'voice_service.dart';
 
-enum AskState { idle, listening, thinking, speaking }
+enum AskState { idle, waiting, listening, thinking, speaking }
 
 class AskPanel extends StatefulWidget {
-  const AskPanel({super.key});
+  const AskPanel({super.key, required this.voice});
+
+  final VoiceService voice;
 
   @override
   State<AskPanel> createState() => _AskPanelState();
 }
 
 class _AskPanelState extends State<AskPanel> {
-  final _voice = VoiceService();
+  VoiceService get _voice => widget.voice;
   AskState _state = AskState.idle;
   String _question = '';
   String _answer = '';
   AppLanguage _language = english;
 
-  @override
-  void dispose() {
-    _voice.stopListening();
-    _voice.stopSpeaking();
-    super.dispose();
-  }
-
   Future<void> _onPressed() async {
     // A second tap stops listening early / stops speaking.
     if (_state == AskState.listening) return _voice.stopListening();
     if (_state == AskState.speaking) return _voice.stopSpeaking();
-    if (_state != AskState.idle) return; // thinking: wait for the answer
+    if (_state != AskState.idle) return; // waiting / thinking: nothing to do
 
     // Read the latest settings (language, mock mode, IP).
     final settings = await SettingsStore.load();
@@ -47,6 +44,11 @@ class _AskPanelState extends State<AskPanel> {
       _question = '';
       _answer = '';
     });
+
+    // 0) If a warning is being spoken, let it finish first
+    //    (otherwise the microphone would hear the phone's own voice).
+    _setState(AskState.waiting);
+    await _voice.waitUntilSilent();
 
     // 1) Listen. Vibrate at the start and at the end.
     String question = '';
@@ -95,6 +97,7 @@ class _AskPanelState extends State<AskPanel> {
 
   String get _buttonText => switch (_state) {
         AskState.idle => 'Ask',
+        AskState.waiting => 'Wait…',
         AskState.listening => 'Listening… tap to stop',
         AskState.thinking => 'Thinking…',
         AskState.speaking => 'Speaking… tap to stop',
@@ -137,7 +140,7 @@ class _AskPanelState extends State<AskPanel> {
                 foregroundColor: Colors.black,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               ),
-              onPressed: _state == AskState.thinking ? null : _onPressed,
+              onPressed: (_state == AskState.thinking || _state == AskState.waiting) ? null : _onPressed,
               child: Text(
                 _buttonText,
                 textAlign: TextAlign.center,

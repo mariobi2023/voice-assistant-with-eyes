@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:voice_assistant_eyes/assistant_client.dart';
 import 'package:voice_assistant_eyes/languages.dart';
 import 'package:voice_assistant_eyes/settings.dart';
+import 'package:voice_assistant_eyes/warning_client.dart';
 
 void main() {
   testWidgets('Settings screen saves IP, language and mock mode', (tester) async {
@@ -44,6 +45,38 @@ void main() {
       expect(answers.any((a) => a.startsWith(lang.notSure.replaceAll('.', ''))), true);
       // The assistant must never say something is "safe".
       expect(answers.any((a) => a.toLowerCase().contains('safe')), false);
+    }
+  });
+
+  test('A warning message from the server is read correctly', () {
+    final w = parseWarning('{"type":"warning","data":{"text":"Attention : escalier.","language":"fr"}}', english);
+    expect(w!.text, 'Attention : escalier.');
+    expect(w.language.code, 'fr');
+
+    // Unknown language → the language chosen in Settings.
+    expect(parseWarning('{"type":"warning","data":{"text":"Door ahead."}}', arabic)!.language.code, 'ar');
+
+    // Not a warning, broken JSON, or empty text → ignored.
+    expect(parseWarning('{"type":"frame","data":{}}', english), isNull);
+    expect(parseWarning('not json', english), isNull);
+    expect(parseWarning('{"type":"warning","data":{"text":""}}', english), isNull);
+  });
+
+  test('Warnings never say "safe"', () {
+    expect(removeSafeClaims('Stairs ahead. The path is safe.'), 'Stairs ahead.');
+    expect(removeSafeClaims('Escalier devant vous. Le passage est sans danger.'), 'Escalier devant vous.');
+    expect(removeSafeClaims('Je ne suis pas sûr.'), 'Je ne suis pas sûr.'); // "not sure" is allowed
+    expect(removeSafeClaims('الطريق آمن.'), '');
+    expect(parseWarning('{"type":"warning","data":{"text":"It is safe."}}', english), isNull);
+  });
+
+  test('Mock warnings are in the chosen language and never say "safe"', () {
+    for (final lang in allLanguages) {
+      for (var i = 0; i < 2; i++) {
+        final w = mockWarning(lang, i);
+        expect(w.language, lang);
+        expect(removeSafeClaims(w.text), w.text);
+      }
     }
   });
 }

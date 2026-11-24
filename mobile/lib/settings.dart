@@ -1,7 +1,7 @@
 // Settings saved on the phone (shared_preferences):
 //   - server IP   (laptop running MediaMTX + backend)
 //   - language    (English / French / Arabic) for listening and speaking
-//   - mock mode   (fake answers while the backend isn't ready)
+//   - mock mode   (fake answers + a fake warning every 30 s, no backend needed)
 import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -136,7 +136,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onChanged: (value) => setState(() => _mock = value),
             title: const Text('Mock answers', style: big),
             subtitle: const Text(
-              'Fake answers, no backend needed',
+              'Fake answers and a warning every 30 s, no backend needed',
               style: TextStyle(fontSize: 18, color: Colors.white70),
             ),
           ),
