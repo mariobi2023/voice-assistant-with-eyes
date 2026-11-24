@@ -36,6 +36,20 @@ NOT_SURE_REASONS = {
     },
 }
 
+# Unprompted warnings (alerts.py). They only say what was seen: never "safe".
+ALERT_TEXTS = {
+    "stairs": {
+        "en": "Stairs ahead.",
+        "fr": "Escalier devant vous.",
+        "ar": "درج أمامك.",
+    },
+    "door": {
+        "en": "Door ahead.",
+        "fr": "Porte devant vous.",
+        "ar": "باب أمامك.",
+    },
+}
+
 # Words that decide the ROUTE of a question (checked in this order: text, then now; else past).
 # English words are always checked too, because people often mix languages.
 ROUTE_KEYWORDS = {

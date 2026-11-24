@@ -12,6 +12,7 @@ export default function App() {
   const [frames, setFrames] = useState([])
   const [qa, setQa] = useState([])
   const [error, setError] = useState('')
+  const [backendOk, setBackendOk] = useState(true) // false after a failed refresh
   // Real state of the WHEP video connection (set by LiveVideo, shown by StatusPanel).
   const [videoState, setVideoState] = useState('Connecting…')
 
@@ -24,8 +25,10 @@ export default function App() {
         setFrames(f)
         setQa(q)
         setError('')
+        setBackendOk(true)
       } catch (err) {
-        setError(err.message)
+        setError(err.message) // already a clear sentence (see api.js)
+        setBackendOk(false)
       }
     }
     load()
@@ -40,12 +43,12 @@ export default function App() {
         {USE_MOCK && <span className="badge">MOCK DATA</span>}
       </header>
 
-      {error && <p className="error" role="alert">Backend error: {error}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
 
       <main className="grid">
         <LiveVideo state={videoState} onStateChange={setVideoState} />
         <QaHistory items={qa} />
-        <StatusPanel status={status} videoState={videoState} />
+        <StatusPanel status={status} videoState={videoState} backendOk={backendOk} />
         <FrameTimeline frames={frames} />
       </main>
     </div>

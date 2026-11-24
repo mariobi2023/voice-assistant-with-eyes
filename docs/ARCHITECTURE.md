@@ -3,6 +3,9 @@
 Multimedia Database & Image Processing — Project Fall 2026/2027
 "An AI That Describes the World Out Loud"
 
+This document describes the system **as it is implemented**. Tunable values quoted here
+live in `server/app/config.py`; if they change there, update them here too.
+
 ## 1. Goal
 
 A phone camera streams live video to a server. The user asks a question by voice
@@ -14,13 +17,15 @@ Workflow: **Stream → Remember → Ask → Answer**
 
 ## 2. Hard rules (from the project brief)
 
-- **No face recognition.** Do not add any face identification/recognition library or feature.
-- The assistant must **never say something is "safe"**. It is a helper, not a replacement for a white cane or guide dog.
-- The assistant must **say "I'm not sure"** when evidence is weak.
-- Answer **only from what the camera saw** (retrieved frames + OCR + detected objects). No guessing.
-- Support **at least two languages** (English, French, Arabic).
-- Keep only what is needed: **delete old frames** (DB rows and image files) automatically.
-- Test only with people who agree.
+| Rule | How the code enforces it |
+|---|---|
+| **No face recognition** | No identification library. Faces are only *detected* (OpenCV YuNet) and **blurred before the frame is written** to disk or the database (`privacy.py`). If blurring fails, the frame is dropped. YOLO "person" is a label only. |
+| **Never say "safe"** | The model prompt forbids it **and** `remove_safe_claims()` (server) / `removeSafeClaims()` (app) delete any sentence with a "safe" word in EN/FR/AR. |
+| **Say "I'm not sure"** | Weak retrieval → "I'm not sure" + short reason in the user's language, without calling the model. The model is told to reply exactly "I'm not sure" when unsure. |
+| **Answer only from the camera** | The model only receives the retrieved frames, their OCR text and detected objects. |
+| **At least two languages** | English, French, Arabic everywhere (STT, TTS, OCR, prompts, messages). |
+| **Delete old frames** | Retention thread deletes rows **and** JPEG files older than 30 min (`retention.py`). |
+| **Test only with people who agree** | Organisational rule for the test sessions. |
 
 ## 3. System diagram
 
@@ -28,17 +33,17 @@ Workflow: **Stream → Remember → Ask → Answer**
 ┌──────────────────────┐   WebRTC (WHIP)   ┌───────────────────┐
 │ MOBILE APP (Flutter) │ ────────────────► │ MediaMTX          │
 │ camera, mic, TTS     │                   │ streaming server  │
-└─────────┬────────────┘                   └──┬─────────────┬──┘
-          │ HTTP POST /ask                    │ RTSP        │ WebRTC (WHEP)
-          │ (question text + lang)            ▼             ▼
-          │                        ┌──────────────────┐  ┌────────────────┐
-          └──────────────────────► │ BACKEND FastAPI  │◄─┤ DASHBOARD      │
-             answer text ◄──────── │ ingest pipeline  │WS│ React + Vite   │
-                                   │ retrieval + VLM  │  └────────────────┘
-                                   └────────┬─────────┘
+└──┬────────────────▲──┘                   └──┬─────────────┬──┘
+   │ HTTP POST /ask │ GET /events (SSE)       │ RTSP        │ WebRTC (WHEP)
+   │ (question+lang)│ warnings                ▼             ▼
+   │                │              ┌──────────────────┐  ┌────────────────┐
+   └────────────────┴────────────► │ BACKEND FastAPI  │◄─┤ DASHBOARD      │
+      answer text ◄─────────────── │ ingest pipeline  │  │ React + Vite   │
+                                   │ retrieval + VLM  │  │ polls every 5 s│
+                                   └────────┬─────────┘  └────────────────┘
                                             ▼
                                PostgreSQL + pgvector
-                               + frames/*.jpg on disk
+                               + frames/*.jpg on disk (faces blurred)
                                             │
                                VLM: Gemini API (main)
                                     Ollama local (fallback)
@@ -46,95 +51,114 @@ Workflow: **Stream → Remember → Ask → Answer**
 
 ## 4. Tech stack
 
-| Layer | Choice | Fallback |
+| Layer | Implemented with | Notes |
 |---|---|---|
-| Mobile app | Flutter + `flutter_webrtc`, `speech_to_text`, `flutter_tts` | Phone browser page (getUserMedia + WHIP) |
-| Streaming | MediaMTX (WHIP in, RTSP/WHEP out) | — |
-| Backend | Python 3.11+, FastAPI, Uvicorn | — |
-| Frame selection / enhancement | OpenCV, `imagehash` | — |
-| OCR (EN/FR/AR) | EasyOCR | PaddleOCR, Tesseract |
-| Object detection | Ultralytics YOLO (COCO) | YOLO-World for custom classes ("door", "stairs") |
-| Embeddings | `sentence-transformers` multilingual model (e.g. paraphrase-multilingual-MiniLM-L12-v2, 384 dims) | CLIP / SigLIP |
-| Database | PostgreSQL + pgvector | SQLite + ChromaDB |
-| Vision-language model | Gemini Flash API (Google AI Studio) | Ollama + `qwen2.5vl:7b` |
-| Speech-to-text | Phone built-in STT | Groq Whisper API |
-| Text-to-speech | Phone built-in TTS | — |
-| Dashboard | React + Vite, WebSocket to backend, WHEP player for live video | Plain HTML/JS |
-
-Note: COCO (standard YOLO) has **no "door" class**. Use YOLO-World or the VLM for door/stairs warnings.
+| Mobile app | Flutter (Android) + `flutter_webrtc`, `speech_to_text`, `flutter_tts`, `http`, `shared_preferences` | Warnings (SSE) via Dart's built-in `dart:io` `HttpClient` |
+| Streaming | MediaMTX (WHIP in, RTSP/WHEP out) | |
+| Backend | Python 3.12, FastAPI, Uvicorn | CPU only (no GPU needed) |
+| Frame selection | OpenCV (Laplacian variance), `imagehash` (pHash) | |
+| Privacy | OpenCV `FaceDetectorYN` (YuNet, 2023mar) | detection + blur only |
+| OCR (EN/FR/AR) | EasyOCR | two readers: `["en","fr"]` and `["ar","en"]` |
+| Object detection | Ultralytics **YOLO-World** `yolov8s-worldv2.pt` with our own class list | COCO YOLO has no "door"/"stairs" |
+| Embeddings | `paraphrase-multilingual-MiniLM-L12-v2` (384 dims) | multilingual: an Arabic question matches English text |
+| Database | PostgreSQL + pgvector (HNSW, cosine) | own small migration runner |
+| Vision-language model | Gemini `gemini-3.5-flash-lite` | fallback: Ollama `qwen2.5vl:3b` on CPU |
+| Speech-to-text / TTS | Phone built-in (`speech_to_text`, `flutter_tts`) | |
+| Dashboard | React 18 + Vite 5, WHEP player | REST polling every 5 s |
 
 ## 5. Streaming
 
 ```
 Phone ──WHIP──► http://<server-ip>:8889/cam/whip       (publish)
-MediaMTX ─────► rtsp://localhost:8554/cam               (backend reads with OpenCV)
-MediaMTX ─────► http://<server-ip>:8889/cam             (dashboard live view / WHEP)
+MediaMTX ─────► rtsp://localhost:8554/cam               (backend reads with OpenCV, over TCP)
+MediaMTX ─────► http://<server-ip>:8889/cam/whep        (dashboard live view)
 ```
 
-- Ports: 8554 (RTSP), 8889 (WebRTC HTTP: WHIP/WHEP), 8189/udp (WebRTC media).
-- Demo setup: phone and laptop on the same Wi-Fi / phone hotspot.
+- Ports: 8554 (RTSP), 8889 (WebRTC HTTP: WHIP/WHEP), 8189/udp (WebRTC media), 8000 (backend).
+- The phone sends **video only** (the microphone stays free for speech recognition).
+- The phone uses **one server IP** (from Settings) for MediaMTX and the backend.
+- OpenCV can read H264, VP8 and VP9, **not AV1**. The backend logs the real codec if it cannot open the stream.
+- If the decoded picture is pixel-identical for 2 s (decoder stuck after the sender changed
+  resolution), the backend reconnects.
 - Quick test without the app: open `http://localhost:8889/cam/publish` in a browser.
 
 ## 6. Ingest pipeline ("Remember")
 
-Backend samples the RTSP stream at ~2 fps and runs each frame through:
+Two background threads, so slow OCR never blocks the stream or `/ask`:
 
 ```
-1. Sharp?   Laplacian variance > SHARPNESS_MIN            else drop
-2. New?     pHash distance to last kept frame > HASH_MIN  else drop
-3. Dark?    mean brightness < DARK_MAX → CLAHE / gamma    (bonus: enhancement)
-4. Blurry?  mild blur → unsharp mask / denoise            (bonus: enhancement)
-5. OCR      EasyOCR → text + confidence
-6. Objects  YOLO → labels + confidence + boxes
-7. Embed    embedding of (OCR text + object labels + short caption)
-8. Save     image to frames/<id>.jpg, row to DB
+Ingest thread (ingest.py), ~2 frames checked per second (SAMPLE_FPS = 2):
+1. Resize   to at most 960 px wide
+2. Sharp?   Laplacian variance >= SHARPNESS_MIN (10)            else drop
+3. New?     pHash distance to last kept frame >= HASH_MIN (5)  else drop
+4. Privacy  detect faces (YuNet, score >= 0.7) and blur them    if this fails → drop
+5. Save     JPEG to server/frames/<timestamp>.jpg + row in "frames" (no OCR yet)
+6. Queue    frame → vision worker (queue of 5; when full the OLDEST waiting frame is skipped)
+
+Vision thread (VisionWorker):
+7. OCR      EasyOCR with the reader of the user's current language (confidence >= 0.3)
+8. Objects  YOLO-World, our classes, confidence >= 0.25
+9. Caption  built from the labels, e.g. "door, 2 chairs, exit sign" (no AI call per frame)
+10. Embed   embedding of "Objects: <caption>. Text: <ocr>" → UPDATE the row
 ```
 
-Thresholds are starting values in config and must be tuned on real footage:
-`SHARPNESS_MIN ≈ 100`, `HASH_MIN ≈ 10`, `DARK_MAX ≈ 60`.
+YOLO-World classes: door, stairs, person, chair, table, exit sign, elevator, car, bicycle, bus,
+traffic light, stop sign, bench, trash can, window, sign, pole, escalator, toilet, sink, laptop,
+bottle, cup, bag.
 
-Retention job (every minute): delete rows and files older than `RETENTION_MINUTES` (e.g. 30).
+**Live frame for "now":** when the user asks about what is in front of them, the latest frame
+read from the stream (at most 2 s old) is stored on demand, even if it looks like the last kept
+frame, so the answer is about the current picture.
+
+**Retention** (`retention.py`): every 60 s, delete rows older than `RETENTION_MINUTES` (30),
+then their JPEG files, then any leftover JPEG older than that in `frames/`.
+
+**Image enhancement (bonus, `enhance.py`):** dark frames (brightness < `DARK_MAX`) are brightened
+before the sharpness check, and slightly blurry frames get a mild unsharp mask so OCR reads
+better. Such frames are saved with `enhanced = true` (shown as a tag on the dashboard timeline).
+
+Thresholds are starting values and must be tuned on real footage.
 
 ## 7. Database schema
 
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
+Created by `server/setup_database.sql` (role, database, pgvector) and
+`server/migrations/0001_create_frames_and_qa_log.sql` (tables), applied automatically at startup.
 
+```sql
 CREATE TABLE frames (
     id           SERIAL PRIMARY KEY,
     captured_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    image_path   TEXT NOT NULL,
-    ocr_text     TEXT,
+    image_path   TEXT NOT NULL,                -- "frames/20261116_153012_123.jpg"
+    ocr_text     TEXT NOT NULL DEFAULT '',
     ocr_conf     REAL,
-    objects      JSONB,          -- [{"label":"person","conf":0.91,"box":[x,y,w,h]}]
-    caption      TEXT,
+    objects      JSONB NOT NULL DEFAULT '[]',  -- [{"label":"door","conf":0.91,"box":[x,y,w,h]}]
+    caption      TEXT NOT NULL DEFAULT '',
     sharpness    REAL,
     brightness   REAL,
-    enhanced     BOOLEAN DEFAULT FALSE,
+    enhanced     BOOLEAN NOT NULL DEFAULT FALSE,
     embedding    vector(384)
 );
-CREATE INDEX ON frames (captured_at);
-CREATE INDEX ON frames USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX frames_captured_at_idx ON frames (captured_at);
+CREATE INDEX frames_embedding_idx ON frames USING hnsw (embedding vector_cosine_ops);
 
 CREATE TABLE qa_log (
     id           SERIAL PRIMARY KEY,
     asked_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    language     TEXT,
-    question     TEXT,
-    answer       TEXT,
-    frame_ids    INT[],
-    confidence   REAL,
-    latency_ms   INT
+    language     TEXT NOT NULL,
+    question     TEXT NOT NULL,
+    answer       TEXT NOT NULL,
+    frame_ids    INT[] NOT NULL DEFAULT '{}',
+    confidence   REAL NOT NULL DEFAULT 0,
+    latency_ms   INT NOT NULL DEFAULT 0
 );
 ```
 
-Search by time **and** meaning:
+Search by time **and** meaning (`db.search_similar`):
 
 ```sql
-SELECT id, image_path, ocr_text, objects,
-       1 - (embedding <=> :qvec) AS similarity
+SELECT ..., 1 - (embedding <=> :qvec) AS similarity
 FROM frames
-WHERE captured_at > now() - interval '2 minutes'
+WHERE captured_at > now() - :seconds * interval '1 second' AND embedding IS NOT NULL
 ORDER BY embedding <=> :qvec
 LIMIT 3;
 ```
@@ -142,93 +166,144 @@ LIMIT 3;
 ## 8. Answer flow ("Ask" → "Answer")
 
 ```
-question (AR/FR/EN) → detect language → embed
-  → retrieve top-3 frames (recent + similar)
-  → best similarity < MIN_SIMILARITY (≈0.35)?  → "I'm not sure" (in user's language)
-  → else send images + OCR + objects to VLM with system prompt below
-  → log to qa_log → return answer text → phone speaks it
+question + language ("en" | "fr" | "ar", sent by the phone — never guessed)
+  → 1. ROUTE     keywords decide the question type: "text", else "now", else "past"
+  → 2. RETRIEVE  frames for that type (or decide "I'm not sure" without calling the model)
+  → 3. GENERATE  Gemini, fallback Ollama, all within a 12 s deadline
+  → 4. CHECK     remove any "safe" sentence (code, not only prompt)
+  → 5. LOG       save in qa_log → return {answer, confidence, frame_ids} → phone speaks it
 ```
 
-VLM system prompt (base):
+### Question types
 
-> You help a blind or visually impaired person. Answer ONLY from the provided images,
-> OCR text and detected objects. Maximum 2 short sentences. Reply in the user's language.
-> Never say that anything is safe. If the evidence is unclear or missing, say you are
-> not sure. Do not identify or describe who a person is.
+| Type | Example keywords (EN/FR/AR) | Retrieval | Not sure when |
+|---|---|---|---|
+| **text** | sign, say, written, read · panneau, écrit · لافتة, مكتوب | Frames from the last 180 s whose OCR contains a word of the question; else recent frames with any text, most similar first | no frame with text in the window |
+| **now** | now, in front of me, what do you see · maintenant, devant moi · الآن, أمامي | The live frame (stored on demand); else the newest stored frame | no frame newer than 5 s |
+| **past** | anything else ("just passed", "earlier") | Top 3 frames of the last 180 s by embedding similarity | best similarity < `MIN_SIMILARITY` (0.20) |
 
-If Gemini fails or hits the rate limit (HTTP 429) → automatically retry with Ollama.
+### Model call and timing
+
+- Phone timeout 15 s → server deadline **`ANSWER_DEADLINE_SECONDS` = 12 s**.
+- Gemini gets at most 9 s. The 2 most relevant frames go as images (384 px wide, JPEG 70),
+  the others as text only (OCR + objects). Minimal "thinking", temperature 0.2.
+- Each request opens a new connection. If no answer after 5 s, the same request is sent again
+  (max 2 copies) and the first good answer wins.
+- If Gemini fails (error, HTTP 429 rate limit, no answer) → Ollama `qwen2.5vl:3b` with the
+  time left (one 512 px image, needs at least 2 s left).
+- If both fail → "I'm not sure. I can't analyse the image right now."
+- Confidence: 0.85 (OCR keyword match), 0.8 (now), similarity (past), 0.6 (text fallback);
+  capped at 0.3 if the model says "I'm not sure", 0.2 when we answer "I'm not sure" ourselves.
+
+System prompt:
+
+> You help a blind or visually impaired person.
+> Answer ONLY from the provided images, OCR text and detected objects. Do not guess.
+> Maximum 2 short sentences. Reply in {language}.
+> Never say that anything is safe, and never judge whether something is safe or dangerous.
+> If the evidence is unclear or missing, reply exactly: "{I'm not sure in that language}"
+> Do not identify or describe who a person is (no names, no faces, no identity).
 
 ## 9. API endpoints
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/ask` | `{question, language}` → `{answer, confidence, frame_ids}` |
-| GET | `/frames?from=&to=` | Timeline of stored frames (dashboard) |
-| GET | `/frames/{id}/image` | Frame image |
-| GET | `/qa` | Past questions and answers |
-| GET | `/status` | Stream connected, fps, frames stored, model in use |
-| WS | `/ws` | Live updates to dashboard (new frame, new Q&A) and proactive warnings to the phone |
+| Method | Path | Purpose | Status |
+|---|---|---|---|
+| POST | `/ask` | `{question (1-500 chars), language}` → `{answer, confidence, frame_ids}` | done |
+| GET | `/status` | `{stream_connected, fps, frames_stored, model}` | done |
+| GET | `/frames?from=&to=&limit=` | Stored frames, oldest first (newest `limit`, default 200) | done |
+| GET | `/frames/{id}/image` | Frame JPEG (404 once deleted by retention) | done |
+| GET | `/qa?limit=` | Past questions and answers, newest first | done |
+| GET | `/events?after_id=&language=` | Proactive warnings pushed to the phone (Server-Sent Events) | done |
+| GET | `/alerts?after_id=&language=` | Same warnings by polling (fallback) | done |
 
-Warning message on `/ws` (read by the phone app; other message types are ignored by it):
+Errors use FastAPI's format `{"detail": ...}`: 422 for an invalid request (e.g. empty or too
+long question), 404 for a missing frame, 500 for a server error. CORS allows the dashboard at
+`http://localhost:5173` and `http://127.0.0.1:5173` only.
 
-```json
-{"type": "warning", "data": {"text": "Warning: stairs ahead.", "language": "en"}}
+### Warnings (`/events`)
+
+One alert as sent by the server over Server-Sent Events (the text is already in the
+language given by `?language=`):
+
+```
+id: 1795000012
+event: alert
+data: {"id": 1795000012, "type": "stairs", "text": "Stairs ahead.", "conf": 0.8, ...}
 ```
 
-The text must never say that something is "safe" (the phone also removes such sentences).
+- **Server side (done, `alerts.py`):** an alert when YOLO-World sees stairs or a door with
+  confidence >= `ALERT_MIN_CONF` in a new frame; same type at most once every 10 s; only alerts
+  younger than 8 s are sent; a `: ping` comment every 15 s keeps the line open.
+- **App side (done, `warning_client.dart`):** opens `GET /events?after_id=<last id>&language=<lang>`,
+  reconnects every 3 s (also after 30 s of silence), and sends the last spoken id so nothing is
+  spoken twice. It vibrates 3 times and speaks the text; a warning that arrives during an answer
+  is spoken right after it; never spoken while the microphone listens. Sentences with "safe" are
+  removed. Mock mode simulates a warning every 30 s. The app shows "not available on this server
+  yet" if the backend answers 404 on `/events`.
+
+### Front-end configuration
+
+- Dashboard: `dashboard/.env` → `VITE_BACKEND_URL`, `VITE_WHEP_URL`, `VITE_USE_MOCK`.
+- App: Settings screen → server IP, language, mock mode (off by default).
 
 ## 10. Repository structure
 
 ```
 voice-assistant-with-eyes/
-├── CLAUDE.md
-├── README.md
+├── README.md               # overview + how to run on Windows
+├── CLAUDE.md               # rules and conventions for the code assistant
 ├── docs/
-│   ├── ARCHITECTURE.md
+│   ├── ARCHITECTURE.md     # this file
+│   ├── TEAM.md             # who built what
+│   ├── PRESENTATION.md     # slide outline
 │   └── project-brief.pdf
-├── mobile/                 # Flutter app
-├── server/
-│   ├── app/
-│   │   ├── main.py         # FastAPI routes
-│   │   ├── config.py       # thresholds, keys from .env
-│   │   ├── ingest.py       # RTSP reading + frame selection
-│   │   ├── vision.py       # enhancement, OCR, YOLO
-│   │   ├── embeddings.py
-│   │   ├── db.py           # Postgres + pgvector
-│   │   ├── assistant.py    # retrieval + VLM + "not sure" logic
-│   │   └── retention.py    # delete old frames
-│   ├── requirements.txt
-│   └── .env.example
-├── dashboard/              # React + Vite
+├── mobile/                 # Flutter app (lib/, test/)
 ├── mediamtx/
 │   └── mediamtx.yml
-└── tests/                  # speed, search quality, answer accuracy
+├── server/
+│   ├── app/
+│   │   ├── main.py         # FastAPI routes, starts the pipeline
+│   │   ├── config.py       # all thresholds, model names, keys from .env
+│   │   ├── ingest.py       # RTSP reading, frame selection, vision worker thread
+│   │   ├── privacy.py      # face detection + blur (no recognition)
+│   │   ├── vision.py       # EasyOCR + YOLO-World + caption
+│   │   ├── embeddings.py   # multilingual sentence embeddings
+│   │   ├── db.py           # every SQL query (Postgres + pgvector)
+│   │   ├── migrate.py      # applies migrations/*.sql once each
+│   │   ├── assistant.py    # route → retrieve → Gemini/Ollama → "safe" check → log
+│   │   ├── languages.py    # EN/FR/AR texts, keywords, "safe" patterns
+│   │   └── retention.py    # delete old frames (rows + files)
+│   ├── migrations/
+│   ├── setup_database.sql
+│   ├── requirements.txt
+│   └── .env.example
+└── dashboard/              # React + Vite (src/, .env.example)
 ```
 
 ## 11. Team ownership
 
 | Area | Owner | Branch prefix |
 |---|---|---|
-| Mobile app + streaming | Member 1 | `feature/mobile-*` |
-| Images + multimedia DB | Member 2 | `feature/vision-*`, `feature/db-*` |
-| AI assistant | Member 3 | `feature/assistant-*` |
-| Web dashboard + tests | Member 4 | `feature/dashboard-*` |
+| Mobile app, streaming, dashboard, warnings (app), tests, docs | Member A — Samer El Murr | `feature/mobile-*`, `feature/dashboard-*`, `docs/*` |
+| Backend: ingest, images, multimedia DB, AI assistant, API | Member B — Mario Bouissa | `backend`, `feature/vision-*`, `feature/db-*`, `feature/assistant-*` |
 
-## 12. Build order
+Details: [TEAM.md](TEAM.md).
 
-1. MediaMTX running; publish from a browser to `/cam`; view it.
-2. `server/ingest.py` reads RTSP and saves selected frames to disk.
-3. OCR + YOLO + embeddings → PostgreSQL.
-4. `/ask` endpoint working (test with Postman/curl).
-5. Flutter app: stream + voice question + spoken answer.
-6. Dashboard: live view, timeline, Q&A history.
-7. Bonuses: unprompted warnings, image enhancement.
-8. Tests: latency, retrieval quality, answer accuracy, user feedback.
+## 12. Build order and status
+
+1. ✅ MediaMTX running; publish from a browser/phone to `/cam`; view it.
+2. ✅ `ingest.py` reads RTSP and saves selected frames (with faces blurred).
+3. ✅ OCR + YOLO-World + embeddings → PostgreSQL.
+4. ✅ `/ask` endpoint (routing, retrieval, Gemini + Ollama, "not sure", "safe" filter).
+5. ✅ Flutter app: stream + voice question + spoken answer (EN/FR/AR).
+6. ✅ Dashboard: live view, status, timeline with images, Q&A history.
+7. Bonuses: ✅ warnings in the app · ✅ `/events` warnings on the server · ✅ image enhancement.
+8. ⬜ Tests: latency, retrieval quality, answer accuracy, user feedback.
 
 ## 13. Deliverables checklist
 
-- [ ] Code in Git with README
-- [ ] Short presentation (design, stack, what we built and learned)
+- [x] Code in Git with README
+- [ ] Short presentation (outline in [PRESENTATION.md](PRESENTATION.md))
 - [ ] Test results: speed, search quality, answer accuracy, feedback
 - [ ] Live demo + questions for each member
-- [ ] Team responsibilities (who built what)
+- [x] Team responsibilities ([TEAM.md](TEAM.md))

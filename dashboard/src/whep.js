@@ -19,12 +19,19 @@ export async function startWhep(url, videoElement) {
   await pc.setLocalDescription(await pc.createOffer())
   await waitForIce(pc)
 
-  // Send the offer to MediaMTX.
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/sdp' },
-    body: pc.localDescription.sdp,
-  })
+  // Send the offer to MediaMTX (give up after 5 s: wrong IP or other Wi-Fi).
+  let response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/sdp' },
+      body: pc.localDescription.sdp,
+      signal: AbortSignal.timeout(5000),
+    })
+  } catch {
+    pc.close()
+    throw new Error(`MediaMTX not reachable at ${new URL(url).host}, check VITE_WHEP_URL and the Wi-Fi`)
+  }
   if (!response.ok) {
     pc.close()
     // 404 means nobody is publishing to "cam" yet.

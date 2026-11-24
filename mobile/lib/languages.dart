@@ -8,8 +8,15 @@ class AppLanguage {
     required this.ttsLocale,
     required this.isRtl,
     required this.didNotHear,
+    required this.noServerIp,
+    required this.serverUnreachable,
+    required this.serverTimeout,
     required this.serverError,
     required this.notSure,
+    required this.volumeHint,
+    required this.streamingStarted,
+    required this.streamingFailed,
+    required this.streamingLost,
   });
 
   final String code; // sent to the backend: "en", "fr", "ar"
@@ -18,8 +25,15 @@ class AppLanguage {
   final String ttsLocale; // flutter_tts voice
   final bool isRtl; // Arabic is written right-to-left
   final String didNotHear; // spoken when no question was heard
-  final String serverError; // spoken when the backend can't be reached
+  final String noServerIp; // no IP in Settings (and mock mode is off)
+  final String serverUnreachable; // nothing answers at that IP (wrong IP, other Wi-Fi, server off)
+  final String serverTimeout; // the server did not answer within 15 s
+  final String serverError; // the server answered, but with an error
   final String notSure; // the "I'm not sure" answer
+  final String volumeHint; // spoken once, the first time the app opens
+  final String streamingStarted; // the camera is now sent to the server
+  final String streamingFailed; // streaming could not start
+  final String streamingLost; // streaming stopped by itself
 }
 
 const english = AppLanguage(
@@ -29,8 +43,15 @@ const english = AppLanguage(
   ttsLocale: 'en-US',
   isRtl: false,
   didNotHear: "I didn't hear a question. Please try again.",
-  serverError: "I can't reach the server right now.",
+  noServerIp: 'No server IP set. Please open Settings.',
+  serverUnreachable: 'Server not reachable. Check the IP and the Wi-Fi.',
+  serverTimeout: 'The server took too long to answer. Please try again.',
+  serverError: 'The server had a problem. Please try again.',
   notSure: "I'm not sure.",
+  volumeHint: 'Press volume up to ask a question.',
+  streamingStarted: 'Streaming started.',
+  streamingFailed: 'Streaming could not start. Check the IP and the Wi-Fi.',
+  streamingLost: 'Streaming stopped. The connection was lost.',
 );
 
 const french = AppLanguage(
@@ -40,8 +61,15 @@ const french = AppLanguage(
   ttsLocale: 'fr-FR',
   isRtl: false,
   didNotHear: "Je n'ai pas entendu de question. Veuillez réessayer.",
-  serverError: "Je n'arrive pas à joindre le serveur.",
+  noServerIp: "Aucune adresse IP de serveur. Ouvrez les réglages.",
+  serverUnreachable: "Serveur injoignable. Vérifiez l'adresse IP et le Wi-Fi.",
+  serverTimeout: 'Le serveur a mis trop de temps à répondre. Veuillez réessayer.',
+  serverError: 'Le serveur a rencontré un problème. Veuillez réessayer.',
   notSure: 'Je ne suis pas sûr.',
+  volumeHint: 'Appuyez sur volume plus pour poser une question.',
+  streamingStarted: 'Diffusion démarrée.',
+  streamingFailed: "La diffusion n'a pas pu démarrer. Vérifiez l'adresse IP et le Wi-Fi.",
+  streamingLost: 'Diffusion arrêtée. La connexion a été perdue.',
 );
 
 const arabic = AppLanguage(
@@ -51,8 +79,15 @@ const arabic = AppLanguage(
   ttsLocale: 'ar-SA',
   isRtl: true,
   didNotHear: 'لم أسمع سؤالاً. حاول مرة أخرى.',
-  serverError: 'لا أستطيع الوصول إلى الخادم الآن.',
+  noServerIp: 'لم يتم تعيين عنوان الخادم. افتح الإعدادات.',
+  serverUnreachable: 'لا يمكن الوصول إلى الخادم. تحقق من عنوان IP والواي فاي.',
+  serverTimeout: 'استغرق الخادم وقتاً طويلاً للرد. حاول مرة أخرى.',
+  serverError: 'حدثت مشكلة في الخادم. حاول مرة أخرى.',
   notSure: 'لست متأكداً.',
+  volumeHint: 'اضغط على زر رفع الصوت لطرح سؤال.',
+  streamingStarted: 'بدأ البث.',
+  streamingFailed: 'تعذر بدء البث. تحقق من عنوان IP والواي فاي.',
+  streamingLost: 'توقف البث. انقطع الاتصال.',
 );
 
 const allLanguages = [english, french, arabic];

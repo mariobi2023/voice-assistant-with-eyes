@@ -138,10 +138,19 @@ def build_caption(objects):
 
 # ---------- Everything for one frame ----------
 
-def analyze_frame(frame):
-    """Run OCR + object detection on one frame and return the results as a dict."""
-    ocr_text, ocr_conf = run_ocr(frame)
+def get_active_language():
+    """The user's language (from their last question), used for alert texts."""
+    return _active_language
+
+
+def analyze_frame(frame, on_objects=None):
+    """Run object detection + OCR on one frame and return the results as a dict.
+    Objects come FIRST (YOLO is fast, OCR takes seconds): on_objects(objects) is called
+    right away, so stairs/door alerts are not delayed by OCR."""
     objects = detect_objects(frame)
+    if on_objects:
+        on_objects(objects)
+    ocr_text, ocr_conf = run_ocr(frame)
     return {
         "ocr_text": ocr_text,
         "ocr_conf": ocr_conf,
