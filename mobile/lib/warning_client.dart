@@ -1,7 +1,12 @@
-// Proactive warnings ("Stairs ahead") pushed by the backend, without the user asking.
-//   connect:  ws://<server-ip>:8000/ws   (same IP as in Settings)
-//   message:  {"type": "warning", "data": {"text": "...", "language": "en" | "fr" | "ar"}}
-// Uses Dart's built-in WebSocket (dart:io): no extra package.
+// Proactive warnings ("Stairs ahead.") pushed by the backend, without the user asking.
+//   connect:  GET http://<server-ip>:8000/events?after_id=<last id>&language=en|fr|ar
+//             (Server-Sent Events: ONE open HTTP connection, the server writes each alert)
+//   message:  id: 1795000012
+//             event: alert
+//             data: {"id": 1795000012, "type": "stairs", "text": "Stairs ahead.", ...}
+//             (empty line = end of message)
+// The server already writes the text in the language we ask for (?language=).
+// Uses Dart's built-in HttpClient (dart:io): no extra package.
 // In MOCK mode there is no connection: a fake warning comes every 30 seconds instead.
 import 'dart:async';
 import 'dart:convert';
@@ -13,7 +18,9 @@ import 'settings.dart';
 
 const Duration kReconnectDelay = Duration(seconds: 3); // wait before trying again
 const Duration kConnectTimeout = Duration(seconds: 5);
-const Duration kPingInterval = Duration(seconds: 10); // notices a dead Wi-Fi connection
+// The server sends a ": ping" line every 15 s when quiet. If we hear NOTHING for 30 s,
+// the Wi-Fi is probably dead: close and reconnect.
+const Duration kSilenceTimeout = Duration(seconds: 30);
 const Duration kMockWarningEvery = Duration(seconds: 30);
 
 // What the warnings line on the main screen shows.
@@ -22,36 +29,60 @@ enum WarningStatus {
   mock, // fake warnings every 30 s
   connecting, // trying to connect (or reconnecting after a drop)
   connected, // listening for warnings
-  notOnServer, // the server is there but has no /ws endpoint (yet)
+  notOnServer, // the server is there but has no /events endpoint
 }
 
-// One warning: the sentence to speak and its language.
+// One warning: the sentence to speak, its language, and the server's alert id (0 in mock).
 class Warning {
-  const Warning(this.text, this.language);
+  const Warning(this.text, this.language, [this.id = 0]);
   final String text;
   final AppLanguage language;
+  final int id;
 }
 
-// Turn one WebSocket message into a Warning, or null if it is not a (valid) warning.
-// `fallback` is used when the message has no known language code.
-Warning? parseWarning(String raw, AppLanguage fallback) {
-  final Object? message;
+// Turn the `data:` JSON of one alert event into a Warning, or null if it is not valid.
+// `language` is the one we asked the server for (the alert JSON has no language field).
+Warning? parseAlert(String data, AppLanguage language) {
+  final Object? alert;
   try {
-    message = jsonDecode(raw);
+    alert = jsonDecode(data);
   } on FormatException {
     return null; // not JSON: ignore it
   }
-  if (message is! Map || message['type'] != 'warning') return null;
-  final data = message['data'];
-  if (data is! Map) return null;
+  if (alert is! Map) return null;
+  final id = alert['id'];
+  if (id is! int) return null;
 
   // Project rule: never say "safe", even if the server sent it.
-  final text = removeSafeClaims((data['text'] ?? '').toString());
+  final text = removeSafeClaims((alert['text'] ?? '').toString());
   if (text.isEmpty) return null;
+  return Warning(text, language, id);
+}
 
-  final code = data['language'];
-  final language = allLanguages.where((l) => l.code == code).firstOrNull ?? fallback;
-  return Warning(text, language);
+// Reads a Server-Sent Events stream line by line and returns each complete event.
+// Only the fields we use: "event:" and "data:". Lines starting with ":" are comments (pings).
+class SseParser {
+  String _event = 'message'; // SSE default event name
+  final _data = <String>[];
+
+  // Feed one line (without the newline). Returns (event, data) when an event ends, else null.
+  (String, String)? addLine(String line) {
+    if (line.isEmpty) {
+      // Empty line = end of one event.
+      final result = _data.isEmpty ? null : (_event, _data.join('\n'));
+      _event = 'message';
+      _data.clear();
+      return result;
+    }
+    if (line.startsWith(':')) return null; // comment, e.g. ": ping"
+    final colon = line.indexOf(':');
+    final field = colon < 0 ? line : line.substring(0, colon);
+    var value = colon < 0 ? '' : line.substring(colon + 1);
+    if (value.startsWith(' ')) value = value.substring(1); // "data: x" → "x"
+    if (field == 'event') _event = value;
+    if (field == 'data') _data.add(value);
+    return null; // "id" and "retry" are not needed: we keep the id from the JSON
+  }
 }
 
 // ---------- MOCK mode ----------
@@ -76,14 +107,17 @@ class WarningClient {
   final void Function(Warning warning) onWarning; // called for every warning
   final void Function(WarningStatus status)? onStatusChanged; // for the status line
 
-  WebSocket? _socket;
+  HttpClient? _http;
   Timer? _timer; // the reconnect timer, or the mock timer
   int _mockCount = 0;
+  // Id of the last alert we spoke. Sent back on reconnect so nothing is spoken twice.
+  // Kept across start()/stop(): the server's ids keep going up, even after a restart.
+  int _lastId = 0;
   // Changes on every start()/stop(). An old connection or timer that wakes up later
   // sees a different number and does nothing (so we never have two connections).
   int _session = 0;
 
-  // Start (or restart) with these settings: mock timer, or real WebSocket.
+  // Start (or restart) with these settings: mock timer, or real connection.
   void start(AppSettings settings) {
     stop();
     final session = _session;
@@ -103,42 +137,59 @@ class WarningClient {
     _session++;
     _timer?.cancel();
     _timer = null;
-    _socket?.close();
-    _socket = null;
+    _http?.close(force: true); // also ends the open /events response
+    _http = null;
     onStatusChanged?.call(WarningStatus.off);
   }
 
   Future<void> _connect(AppSettings settings, int session) async {
+    final http = HttpClient()..connectionTimeout = kConnectTimeout;
+    _http = http;
     try {
-      final client = HttpClient()..connectionTimeout = kConnectTimeout;
-      final socket = await WebSocket.connect(
-        'ws://${settings.serverIp}:$kBackendPort/ws',
-        customClient: client,
-      );
-      if (session != _session) {
-        socket.close(); // stop() was called while we were connecting
+      final url = Uri.http('${settings.serverIp}:$kBackendPort', '/events', {
+        'after_id': '$_lastId',
+        'language': settings.language.code,
+      });
+      final request = await http.getUrl(url);
+      request.headers.set(HttpHeaders.acceptHeader, 'text/event-stream');
+      final response = await request.close();
+      if (session != _session) return; // stop() was called while we were connecting
+
+      if (response.statusCode == HttpStatus.notFound) {
+        // The server answered, but has no /events endpoint (older backend).
+        // Keep trying, so warnings start working as soon as the backend has it.
+        await response.drain<void>();
+        _reconnectLater(settings, session, WarningStatus.notOnServer);
         return;
       }
-      socket.pingInterval = kPingInterval;
-      _socket = socket;
+      if (response.statusCode != HttpStatus.ok) {
+        await response.drain<void>();
+        _reconnectLater(settings, session);
+        return;
+      }
       onStatusChanged?.call(WarningStatus.connected);
 
-      socket.listen(
-        (message) {
-          if (message is! String) return;
-          final warning = parseWarning(message, settings.language);
-          if (warning != null) onWarning(warning);
-        },
-        onDone: () => _reconnectLater(settings, session), // server closed / Wi-Fi dropped
-        onError: (_) => _reconnectLater(settings, session),
-        cancelOnError: true, // after an error, onDone is not called too
-      );
-    } on WebSocketException {
-      // The server answered, but refused the WebSocket: it has no /ws endpoint yet.
-      // Keep trying, so warnings start working as soon as the backend adds it.
-      _reconnectLater(settings, session, WarningStatus.notOnServer);
+      // Read the stream line by line until it ends (or goes silent too long).
+      final parser = SseParser();
+      final lines = response
+          .transform(utf8.decoder) // UTF-8: Arabic text arrives correctly
+          .transform(const LineSplitter())
+          .timeout(kSilenceTimeout);
+      await for (final line in lines) {
+        if (session != _session) return;
+        final event = parser.addLine(line);
+        if (event == null || event.$1 != 'alert') continue;
+        final warning = parseAlert(event.$2, settings.language);
+        if (warning == null || warning.id <= _lastId) continue; // invalid or already spoken
+        _lastId = warning.id;
+        onWarning(warning);
+      }
+      _reconnectLater(settings, session); // the server closed the stream
     } catch (_) {
-      _reconnectLater(settings, session); // server not reachable (yet)
+      // Server not reachable, Wi-Fi dropped, or silent for too long.
+      _reconnectLater(settings, session);
+    } finally {
+      http.close(force: true);
     }
   }
 
@@ -146,7 +197,7 @@ class WarningClient {
   void _reconnectLater(AppSettings settings, int session,
       [WarningStatus status = WarningStatus.connecting]) {
     if (session != _session) return;
-    _socket = null;
+    _http = null;
     onStatusChanged?.call(status);
     _timer = Timer(kReconnectDelay, () => _connect(settings, session));
   }

@@ -59,18 +59,33 @@ void main() {
     }
   });
 
-  test('A warning message from the server is read correctly', () {
-    final w = parseWarning('{"type":"warning","data":{"text":"Attention : escalier.","language":"fr"}}', english);
-    expect(w!.text, 'Attention : escalier.');
-    expect(w.language.code, 'fr');
+  test('An alert from the server (/events) is read correctly', () {
+    // The exact lines the server sends for one alert, then a keep-alive ping.
+    final parser = SseParser();
+    final lines = [
+      'retry: 2000',
+      ': connected',
+      '',
+      'id: 1795000012',
+      'event: alert',
+      'data: {"id": 1795000012, "type": "stairs", "text": "درج أمامك.", "conf": 0.8}',
+      '',
+      ': ping',
+      '',
+    ];
+    final events = [for (final l in lines) parser.addLine(l)].whereType<(String, String)>().toList();
+    expect(events.length, 1); // comments and pings are not events
+    expect(events.single.$1, 'alert');
 
-    // Unknown language → the language chosen in Settings.
-    expect(parseWarning('{"type":"warning","data":{"text":"Door ahead."}}', arabic)!.language.code, 'ar');
+    final w = parseAlert(events.single.$2, arabic);
+    expect(w!.text, 'درج أمامك.');
+    expect(w.language.code, 'ar'); // the language we asked the server for
+    expect(w.id, 1795000012);
 
-    // Not a warning, broken JSON, or empty text → ignored.
-    expect(parseWarning('{"type":"frame","data":{}}', english), isNull);
-    expect(parseWarning('not json', english), isNull);
-    expect(parseWarning('{"type":"warning","data":{"text":""}}', english), isNull);
+    // Broken JSON, no id, or empty text → ignored.
+    expect(parseAlert('not json', english), isNull);
+    expect(parseAlert('{"text":"Door ahead."}', english), isNull);
+    expect(parseAlert('{"id":1,"text":""}', english), isNull);
   });
 
   test('Warnings never say "safe"', () {
@@ -78,7 +93,7 @@ void main() {
     expect(removeSafeClaims('Escalier devant vous. Le passage est sans danger.'), 'Escalier devant vous.');
     expect(removeSafeClaims('Je ne suis pas sûr.'), 'Je ne suis pas sûr.'); // "not sure" is allowed
     expect(removeSafeClaims('الطريق آمن.'), '');
-    expect(parseWarning('{"type":"warning","data":{"text":"It is safe."}}', english), isNull);
+    expect(parseAlert('{"id":1,"text":"It is safe."}', english), isNull);
   });
 
   test('Mock warnings are in the chosen language and never say "safe"', () {

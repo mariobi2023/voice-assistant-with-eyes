@@ -33,7 +33,7 @@
 | `lib/whip_client.dart` | Opens the back camera and publishes it to MediaMTX via WHIP |
 | `lib/ask_panel.dart` | Big Ask button: vibrate → listen → vibrate → ask → speak |
 | `lib/voice_service.dart` | speech_to_text (listen) and flutter_tts (speak, one sentence at a time) |
-| `lib/warning_client.dart` | WebSocket `/ws` for warnings, auto-reconnect, mock warnings |
+| `lib/warning_client.dart` | Server-Sent Events `GET /events` for warnings, auto-reconnect, mock warnings |
 | `lib/assistant_client.dart` | `POST /ask` to the backend (15 s timeout), error kinds, mock answers |
 | `lib/languages.dart` | English / French / Arabic: locales, the app's own sentences, "safe" filter |
 | `lib/settings.dart` | Settings screen: server IP, language, mock mode (saved on the phone) |
