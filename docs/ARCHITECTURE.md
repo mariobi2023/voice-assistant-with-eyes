@@ -34,8 +34,8 @@ Workflow: **Stream → Remember → Ask → Answer**
 │ MOBILE APP (Flutter) │ ────────────────► │ MediaMTX          │
 │ camera, mic, TTS     │                   │ streaming server  │
 └──┬────────────────▲──┘                   └──┬─────────────┬──┘
-   │ HTTP POST /ask │ WS /ws                  │ RTSP        │ WebRTC (WHEP)
-   │ (question+lang)│ warnings (to do)        ▼             ▼
+   │ HTTP POST /ask │ GET /events (SSE)       │ RTSP        │ WebRTC (WHEP)
+   │ (question+lang)│ warnings, /alerts       ▼             ▼
    │                │              ┌──────────────────┐  ┌────────────────┐
    └────────────────┴────────────► │ BACKEND FastAPI  │◄─┤ DASHBOARD      │
       answer text ◄─────────────── │ ingest pipeline  │  │ React + Vite   │
@@ -53,7 +53,7 @@ Workflow: **Stream → Remember → Ask → Answer**
 
 | Layer | Implemented with | Notes |
 |---|---|---|
-| Mobile app | Flutter (Android) + `flutter_webrtc`, `speech_to_text`, `flutter_tts`, `http`, `shared_preferences` | WebSocket via Dart's built-in `dart:io` |
+| Mobile app | Flutter (Android) + `flutter_webrtc`, `speech_to_text`, `flutter_tts`, `http`, `shared_preferences` | Warnings via Server-Sent Events with Dart's built-in `HttpClient` |
 | Streaming | MediaMTX (WHIP in, RTSP/WHEP out) | |
 | Backend | Python 3.12, FastAPI, Uvicorn | CPU only (no GPU needed) |
 | Frame selection | OpenCV (Laplacian variance), `imagehash` (pHash) | |
@@ -212,27 +212,51 @@ System prompt:
 | GET | `/frames?from=&to=&limit=` | Stored frames, oldest first (newest `limit`, default 200) | done |
 | GET | `/frames/{id}/image` | Frame JPEG (404 once deleted by retention) | done |
 | GET | `/qa?limit=` | Past questions and answers, newest first | done |
-| WS | `/ws` | Proactive warnings to the phone (and live updates to the dashboard) | **to do** |
+| GET | `/events?language=&after_id=` | Warnings pushed to the phone (Server-Sent Events, stays open) | `backend` branch |
+| GET | `/alerts?language=&after_id=` | Same warnings as a JSON list (polling fallback) | `backend` branch |
 
 Errors use FastAPI's format `{"detail": ...}`: 422 for an invalid request (e.g. empty or too
 long question), 404 for a missing frame, 500 for a server error. CORS allows the dashboard at
 `http://localhost:5173` and `http://127.0.0.1:5173` only.
 
-### Warnings (`/ws`)
+### Warnings (`/events` and `/alerts`)
 
-Warning message, read by the phone app (other message types are ignored by it):
+**Server** (`server/app/alerts.py`, on the `backend` branch, commit `fac32d2`, not yet in
+`dev`): when YOLO-World sees **stairs** or a **door** with confidence ≥ 0.40 in a new frame,
+it creates an alert: at most once per type every 10 s, kept in memory, given only while
+younger than 8 s. Texts (never "safe"): "Stairs ahead." / "Escalier devant vous." /
+"درج أمامك.", "Door ahead." / "Porte devant vous." / "باب أمامك.".
 
-```json
-{"type": "warning", "data": {"text": "Warning: stairs ahead.", "language": "en"}}
+`GET /events?language=fr&after_id=0` keeps the connection open and pushes each alert as a
+Server-Sent Event (a ping comment every 15 s when quiet):
+
+```
+retry: 2000
+
+id: 1795000012
+event: alert
+data: {"id": 1795000012, "type": "stairs", "text": "Escalier devant vous.", "conf": 0.62, "frame_id": 431, "created_at": "2026-11-24T14:55:02+00:00"}
+
+: ping
 ```
 
-- **App side (done):** connects to `ws://<server-ip>:8000/ws`, reconnects every 3 s, vibrates
-  3 times and speaks the text; a warning that arrives during an answer is spoken right after
-  it; never spoken while the microphone listens. Sentences with "safe" are removed. Mock mode
-  simulates a warning every 30 s. The app shows "not available on this server yet" while the
-  backend has no `/ws`.
-- **Server side (to do):** send a warning when a frame shows e.g. a door or stairs ahead.
-  The text must never say that something is "safe".
+`GET /alerts?language=fr&after_id=0` returns the same objects as a JSON list.
+
+- `id` always increases (it starts from the Unix time, so also after a server restart).
+- `type` is the alert kind (`"stairs"`, `"door"`), `text` is already in the asked language.
+- Without `?language=` the server uses the language of the user's last question.
+
+**App** (`mobile/lib/warning_client.dart`):
+- Opens `/events` with the Settings language and `after_id` = last id spoken (also sent as
+  the `Last-Event-ID` header). Reconnects after the server's `retry` delay (2 s); a silent
+  line for 40 s (no ping) counts as dead.
+- After 3 failed `/events` attempts in a row it polls `/alerts` every 1 s, and tries `/events`
+  again every 60 s.
+- Never twice: an alert whose id is not higher than the last one spoken is ignored.
+- Sentences with "safe" are still removed. Vibrates 3 times, speaks through the shared voice
+  queue (right after an answer being spoken, never while the microphone listens).
+- Status line: connected / checking every second (polling) / server not reachable /
+  not available on this server (no `/events` or `/alerts`) / mock (a fake warning every 30 s).
 
 ### Front-end configuration
 
@@ -290,7 +314,8 @@ Details: [TEAM.md](TEAM.md).
 4. ✅ `/ask` endpoint (routing, retrieval, Gemini + Ollama, "not sure", "safe" filter).
 5. ✅ Flutter app: stream + voice question + spoken answer (EN/FR/AR).
 6. ✅ Dashboard: live view, status, timeline with images, Q&A history.
-7. Bonuses: ✅ warnings in the app · ⬜ `/ws` warnings on the server · ⬜ image enhancement.
+7. Bonuses: ✅ warnings in the app (`/events` + `/alerts`) · 🔶 warnings and image enhancement
+   on the server (`backend` branch, `fac32d2`, not yet merged into `dev`).
 8. ⬜ Tests: latency, retrieval quality, answer accuracy, user feedback.
 
 ## 13. Deliverables checklist
