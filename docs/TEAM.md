@@ -40,7 +40,7 @@ Each member leads their own area; integration and testing are shared.
 
 | Task | Owner |
 |---|---|
-| Backend `WS /ws` endpoint that sends warnings (and live updates to the dashboard) | B (app side done by A) |
+| Merge backend warnings (`/events`, `/alerts`) and image enhancement (`fac32d2`) into `dev` | B (app side done by A: SSE client, `feature/mobile-sse-alerts`) |
 | Bonus: dark / blurry image enhancement before analysis (`enhanced` column is ready) | B |
 | Test results: speed (latency), search quality, answer accuracy, user feedback | A, with B |
 | Tuning thresholds on real footage (`SHARPNESS_MIN`, `HASH_MIN`, `MIN_SIMILARITY`) | B |

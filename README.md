@@ -39,8 +39,9 @@ what the camera saw a moment ago.
                                         Answer model: Gemini API → fallback Ollama (local)
 ```
 
-Warnings reach the phone over `WS /ws` (`{"type":"warning",...}`). The app side is done; the
-backend endpoint is still to do.
+Warnings ("Stairs ahead.") reach the phone over `GET /events` (Server-Sent Events, one open
+connection), with `GET /alerts` polling as a fallback. The app side is done; the server side is
+on the `backend` branch, not yet merged into `dev`.
 
 Full details (pipeline, database schema, answer flow, API): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

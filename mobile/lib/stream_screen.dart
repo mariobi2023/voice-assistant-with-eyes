@@ -112,7 +112,7 @@ class _StreamScreenState extends State<StreamScreen> {
     super.dispose();
   }
 
-  // Read the settings and (re)start the warnings with them (real WebSocket or mock timer).
+  // Read the settings and (re)start the warnings with them (server /events or /alerts, or mock timer).
   // Returns the settings, or null if the screen was closed meanwhile.
   Future<AppSettings?> _loadSettings() async {
     final settings = await SettingsStore.load();
@@ -193,6 +193,7 @@ class _StreamScreenState extends State<StreamScreen> {
         WarningStatus.mock => 'Warnings: mock (every 30 s)',
         WarningStatus.connecting => 'Warnings: server not reachable, retrying…',
         WarningStatus.connected => 'Warnings: connected',
+        WarningStatus.polling => 'Warnings: connected (checking every second)',
         WarningStatus.notOnServer => 'Warnings: not available on this server yet',
       };
 
