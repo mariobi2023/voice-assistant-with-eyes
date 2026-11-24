@@ -1,5 +1,5 @@
 // Settings saved on the phone (shared_preferences):
-//   - server IP   (laptop running MediaMTX + backend)
+//   - server IP   (laptop running MediaMTX on port 8889 AND the backend on port 8000)
 //   - language    (English / French / Arabic) for listening and speaking
 //   - mock mode   (fake answers + a fake warning every 30 s, no backend needed)
 import 'package:material_ui/material_ui.dart';
@@ -20,14 +20,24 @@ class SettingsStore {
   static const _ipKey = 'server_ip';
   static const _languageKey = 'language';
   static const _mockKey = 'mock_mode';
+  static const _hintKey = 'volume_hint_spoken';
 
   static Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
     return AppSettings(
       serverIp: prefs.getString(_ipKey) ?? '',
       language: languageFromCode(prefs.getString(_languageKey) ?? 'en'),
-      mock: prefs.getBool(_mockKey) ?? true, // ON by default until the backend exists
+      mock: prefs.getBool(_mockKey) ?? false, // OFF by default: use the real backend
     );
+  }
+
+  // True only the FIRST time it is called on this phone (then remembered):
+  // used to speak the "Press volume up to ask a question" hint once.
+  static Future<bool> isFirstHint() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(_hintKey) ?? false) return false;
+    await prefs.setBool(_hintKey, true);
+    return true;
   }
 
   static Future<void> save(AppSettings settings) async {
@@ -48,7 +58,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final _ipController = TextEditingController();
   AppLanguage _language = english;
-  bool _mock = true;
+  bool _mock = false;
   String? _error;
 
   @override

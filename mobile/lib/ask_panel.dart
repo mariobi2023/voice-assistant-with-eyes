@@ -20,15 +20,23 @@ class AskPanel extends StatefulWidget {
   final VoiceService voice;
 
   @override
-  State<AskPanel> createState() => _AskPanelState();
+  State<AskPanel> createState() => AskPanelState();
 }
 
-class _AskPanelState extends State<AskPanel> {
+// Public, so the main screen can call ask() from the volume button or a tap anywhere
+// (through a GlobalKey<AskPanelState>).
+class AskPanelState extends State<AskPanel> {
   VoiceService get _voice => widget.voice;
   AskState _state = AskState.idle;
   String _question = '';
   String _answer = '';
   AppLanguage _language = english;
+
+  // Same as pressing the Ask button: start a question, or stop listening / speaking.
+  void ask() {
+    if (_state == AskState.thinking || _state == AskState.waiting) return; // button is disabled then
+    _onPressed();
+  }
 
   Future<void> _onPressed() async {
     // A second tap stops listening early / stops speaking.
@@ -66,6 +74,10 @@ class _AskPanelState extends State<AskPanel> {
       return;
     }
     setState(() => _question = question);
+    if (!settings.mock && settings.serverIp.isEmpty) {
+      await _say(lang.noServerIp, lang);
+      return;
+    }
 
     // 2) Ask (mock or real backend).
     _setState(AskState.thinking);
@@ -75,8 +87,12 @@ class _AskPanelState extends State<AskPanel> {
           ? await askMock(lang)
           : await askBackend(settings.serverIp, question, lang);
       answer = result.answer;
-    } catch (_) {
-      answer = lang.serverError; // no server, timeout (15 s), or bad reply
+    } on AskException catch (e) {
+      debugPrint('Ask failed: $e');
+      answer = e.message(lang); // "Server not reachable…", "took too long…" or "had a problem…"
+    } catch (e) {
+      debugPrint('Ask failed: $e');
+      answer = lang.serverError;
     }
 
     // 3) Speak the answer in the same language.

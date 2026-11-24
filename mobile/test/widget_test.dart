@@ -33,7 +33,7 @@ void main() {
     final saved = await SettingsStore.load();
     expect(saved.serverIp, '192.168.1.20');
     expect(saved.language.code, 'fr');
-    expect(saved.mock, true); // mock is on by default
+    expect(saved.mock, false); // mock is off by default: real backend
   });
 
   testWidgets('Settings screen rejects a full URL', (tester) async {
@@ -89,5 +89,37 @@ void main() {
         expect(removeSafeClaims(w.text), w.text);
       }
     }
+  });
+
+  test('Server error messages exist in every language and never say "safe"', () {
+    for (final lang in allLanguages) {
+      for (final kind in AskFailure.values) {
+        final text = AskException(kind, '').message(lang);
+        expect(text, isNotEmpty);
+        expect(removeSafeClaims(text), text);
+      }
+      expect(removeSafeClaims(lang.noServerIp), lang.noServerIp);
+    }
+  });
+
+  test('Hands-free sentences exist in every language and never say "safe"', () {
+    for (final lang in allLanguages) {
+      for (final text in [
+        lang.volumeHint,
+        lang.streamingStarted,
+        lang.streamingFailed,
+        lang.streamingLost,
+      ]) {
+        expect(text, isNotEmpty);
+        expect(removeSafeClaims(text), text);
+      }
+    }
+  });
+
+  test('The volume-up hint is spoken only the first time', () async {
+    SharedPreferences.setMockInitialValues({}); // a phone that never opened the app
+    expect(await SettingsStore.isFirstHint(), true);
+    expect(await SettingsStore.isFirstHint(), false);
+    expect(await SettingsStore.isFirstHint(), false);
   });
 }

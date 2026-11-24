@@ -6,6 +6,7 @@
 //   3) make an SDP "offer" and POST it to http://<server-ip>:8889/cam/whip
 //   4) MediaMTX replies with an SDP "answer" → video starts flowing to the server
 import 'dart:async';
+import 'dart:io' show SocketException;
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:http/http.dart' as http;
@@ -51,7 +52,7 @@ class WhipClient {
           .post(whipUrl, headers: {'Content-Type': 'application/sdp'}, body: offer!.sdp)
           .timeout(const Duration(seconds: 10));
       if (response.statusCode != 201 && response.statusCode != 200) {
-        throw Exception('Server answered ${response.statusCode}');
+        throw Exception('MediaMTX answered ${response.statusCode}');
       }
 
       // Remember the session URL so stop() can tell MediaMTX we are leaving.
@@ -63,7 +64,13 @@ class WhipClient {
       return _stream!;
     } on TimeoutException {
       await stop();
-      throw Exception('Server $serverIp did not answer');
+      throw Exception('Server $serverIp did not answer. Check the IP and the Wi-Fi');
+    } on SocketException {
+      await stop();
+      throw Exception('Server not reachable. Check the IP and the Wi-Fi');
+    } on http.ClientException {
+      await stop();
+      throw Exception('Server not reachable. Check the IP and the Wi-Fi');
     } catch (e) {
       await stop(); // release the camera if anything failed
       rethrow;
