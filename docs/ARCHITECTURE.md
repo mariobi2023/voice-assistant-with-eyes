@@ -167,7 +167,15 @@ If Gemini fails or hits the rate limit (HTTP 429) → automatically retry with O
 | GET | `/frames/{id}/image` | Frame image |
 | GET | `/qa` | Past questions and answers |
 | GET | `/status` | Stream connected, fps, frames stored, model in use |
-| WS | `/ws` | Live updates to dashboard (new frame, new Q&A) |
+| WS | `/ws` | Live updates to dashboard (new frame, new Q&A) and proactive warnings to the phone |
+
+Warning message on `/ws` (read by the phone app; other message types are ignored by it):
+
+```json
+{"type": "warning", "data": {"text": "Warning: stairs ahead.", "language": "en"}}
+```
+
+The text must never say that something is "safe" (the phone also removes such sentences).
 
 ## 10. Repository structure
 

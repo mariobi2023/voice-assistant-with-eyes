@@ -5,6 +5,11 @@
 - **Ask** button: listens (speech_to_text), sends `{"question","language"}` to
   `POST http://<server-ip>:8000/ask`, and speaks the answer (flutter_tts).
   English, French and Arabic. A **mock mode** gives fake answers until the backend exists.
+- **Warnings** (no question needed): listens on `ws://<server-ip>:8000/ws` for
+  `{"type":"warning","data":{"text":"...","language":"en"}}`, vibrates 3 times and speaks the
+  text. If an answer is being spoken, the warning is spoken right after it. Reconnects every
+  3 s if the connection drops. Any sentence saying "safe" is removed. In mock mode a fake
+  warning comes every 30 s in the chosen language.
 
 ## Files
 
@@ -14,12 +19,13 @@
 | `lib/stream_screen.dart` | Status text, camera preview, big Start/Stop streaming button, Ask panel |
 | `lib/whip_client.dart` | Opens the back camera and publishes it to MediaMTX via WHIP |
 | `lib/ask_panel.dart` | Big Ask button: vibrate → listen → vibrate → ask → speak |
-| `lib/voice_service.dart` | speech_to_text (listen) and flutter_tts (speak) |
+| `lib/voice_service.dart` | speech_to_text (listen) and flutter_tts (speak, one sentence at a time) |
+| `lib/warning_client.dart` | WebSocket `/ws` for warnings, auto-reconnect, mock warnings |
 | `lib/assistant_client.dart` | `POST /ask` to the backend (15 s timeout) + mock answers |
-| `lib/languages.dart` | English / French / Arabic: locales and the app's own spoken sentences |
+| `lib/languages.dart` | English / French / Arabic: locales, the app's own sentences, "safe" filter |
 | `lib/settings.dart` | Settings screen: server IP, language, mock mode (saved on the phone) |
 | `android/app/src/main/AndroidManifest.xml` | Camera, microphone, internet permissions; plain `http://`; speech + TTS services |
-| `test/widget_test.dart` | Settings save/reject tests, mock answers test |
+| `test/widget_test.dart` | Settings save/reject tests, mock answers, warning parsing and "safe" filter |
 
 ## Run (once the Android NDK is installed)
 

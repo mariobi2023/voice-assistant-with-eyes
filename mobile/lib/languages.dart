@@ -60,3 +60,24 @@ const allLanguages = [english, french, arabic];
 // Find a language by its code ("en", "fr", "ar"); English if unknown.
 AppLanguage languageFromCode(String code) =>
     allLanguages.firstWhere((l) => l.code == code, orElse: () => english);
+
+// ---------- Never say "safe" ----------
+// Project rule: the assistant must NEVER tell the user that something is safe.
+// Same idea as the server (server/app/languages.py): any sentence with one of these
+// words, in any of the three languages, is removed before it is spoken.
+// "pas sûr" (= not sure) is allowed, so "Je ne suis pas sûr" is kept.
+final _safePatterns = [
+  RegExp('safe', caseSensitive: false), // also "safely", "safety", "unsafe"
+  RegExp(r'\bno danger\b', caseSensitive: false),
+  RegExp(r'\bsans (danger|risque)\b', caseSensitive: false),
+  RegExp(r'\ben sécurité|\bsécuritaire|\bsécurisée?s?\b', caseSensitive: false),
+  RegExp(r'(?<!pas )\bsûre?s?\b', caseSensitive: false),
+  RegExp('آمن|أمان|مأمون|لا خطر|بدون خطر'),
+];
+
+// Drop every sentence that says something is safe. Returns the rest ('' if nothing is left).
+String removeSafeClaims(String text) {
+  final sentences = text.trim().split(RegExp(r'(?<=[.!?؟])\s+'));
+  final kept = sentences.where((s) => !_safePatterns.any((p) => p.hasMatch(s)));
+  return kept.join(' ').trim();
+}
