@@ -9,9 +9,19 @@ import 'package:voice_assistant_eyes/languages.dart';
 import 'package:voice_assistant_eyes/settings.dart';
 import 'package:voice_assistant_eyes/warning_client.dart';
 
+// The default test window is 800x600: too short, the Save button ends up below the edge
+// and the tap misses it. Use a phone-sized screen instead (1080x2400 pixels, like a
+// typical Android phone = 411x914 on screen).
+void usePhoneScreen(WidgetTester tester) {
+  tester.view.physicalSize = const Size(1080, 2400);
+  tester.view.devicePixelRatio = 2.625;
+  addTearDown(tester.view.reset); // back to normal after the test
+}
+
 void main() {
   testWidgets('Settings screen saves IP, language and mock mode', (tester) async {
     SharedPreferences.setMockInitialValues({}); // fake phone storage
+    usePhoneScreen(tester);
 
     await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
     await tester.pumpAndSettle();
@@ -28,6 +38,7 @@ void main() {
 
   testWidgets('Settings screen rejects a full URL', (tester) async {
     SharedPreferences.setMockInitialValues({});
+    usePhoneScreen(tester);
 
     await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
     await tester.pumpAndSettle();
