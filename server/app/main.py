@@ -1,20 +1,25 @@
 """FastAPI web server: the API used by the phone app and the dashboard.
 
-Run (from server/):   uvicorn app.main:app --host 0.0.0.0 --port 8000
+Run (from server/):   uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 3
+  (--timeout-graceful-shutdown 3: Ctrl+C stops the server within 3 s even while the phone is
+   connected to /events — that stream never closes by itself, so uvicorn would wait forever.)
 Try it in a browser:  http://localhost:8000/docs
 
 At startup it also starts the background pipeline: ingest → vision → database, + retention.
 """
+import asyncio
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from app import assistant, config, db
+from app import alerts, assistant, config, db, vision
 from app.ingest import setup_logging, start_pipeline
+from app.languages import normalize_language
 
 setup_logging()  # our INFO logs (frame kept/dropped, answer time) in the uvicorn console
 pipeline = {}    # the running ingestor and the function that stops everything
@@ -47,6 +52,15 @@ class AskResponse(BaseModel):
     answer: str
     confidence: float  # 0..1
     frame_ids: list[int]
+
+
+class AlertOut(BaseModel):
+    id: int              # increasing, also across restarts: the phone sends the last id it spoke as ?after_id=
+    type: str            # "stairs" or "door"
+    text: str            # what the phone says, e.g. "Stairs ahead." (in the user's language)
+    conf: float          # YOLO-World confidence
+    frame_id: int        # the frame where it was seen
+    created_at: datetime  # when the camera saw it
 
 
 # Dashboard shapes: same field names as dashboard/src/mockData.js.
@@ -96,6 +110,58 @@ def ask(request: AskRequest):
     A plain `def` (not async): FastAPI runs it in a worker thread, so a slow model
     call does not block other requests."""
     return assistant.answer_question(request.question, request.language)
+
+
+@app.get("/alerts", response_model=list[AlertOut])
+def get_alerts(after_id: int = Query(0, ge=0),
+               language: str | None = Query(None, examples=["en", "fr", "ar"])):
+    """Unprompted warnings ("Stairs ahead.") the phone has not spoken yet, oldest first.
+    The phone polls this about once a second with the last id it spoke as ?after_id=.
+    Without ?language= the language of the user's last question is used."""
+    lang = normalize_language(language) if language else vision.get_active_language()
+    return alerts.recent_alerts(after_id, lang)
+
+
+@app.get("/events")
+async def events(request: Request,
+                 after_id: int = Query(0, ge=0),
+                 language: str | None = Query(None, examples=["en", "fr", "ar"])):
+    """Push alerts to the phone over ONE open connection (Server-Sent Events).
+    Each alert is sent as soon as it exists:  id / event: alert / data: {same JSON as /alerts}.
+    On reconnect the phone's SSE client sends the last id back (Last-Event-ID header), so
+    nothing is spoken twice. Without ?language= the language of the user's last question is used."""
+    last_id = max(after_id, _last_event_id(request))
+    return StreamingResponse(
+        _alert_stream(request, last_id, language),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},  # don't buffer the stream
+    )
+
+
+def _last_event_id(request):
+    """The Last-Event-ID header sent by an SSE client when it reconnects (0 if missing/invalid)."""
+    try:
+        return max(0, int(request.headers.get("last-event-id", "0")))
+    except ValueError:
+        return 0
+
+
+async def _alert_stream(request, last_id, language):
+    """Async generator: yields SSE text forever, until the phone disconnects.
+    `async` + asyncio.sleep: thousands of waiting connections cost no threads."""
+    yield f"retry: {config.EVENTS_RETRY_MS}\n: connected\n\n"  # "retry" = reconnect delay
+    last_sent = time.monotonic()
+    while not await request.is_disconnected():
+        # Language is checked each time: the user may switch language mid-session.
+        lang = normalize_language(language) if language else vision.get_active_language()
+        for alert in alerts.recent_alerts(last_id, lang):
+            yield alerts.to_sse(alert)
+            last_id = alert["id"]
+            last_sent = time.monotonic()
+        if time.monotonic() - last_sent >= config.EVENTS_KEEPALIVE_SECONDS:
+            yield ": ping\n\n"  # a comment line: SSE clients ignore it, it just keeps the line open
+            last_sent = time.monotonic()
+        await asyncio.sleep(config.EVENTS_CHECK_SECONDS)
 
 
 # ---------- Endpoints: dashboard ----------
