@@ -30,15 +30,14 @@ class _StreamScreenState extends State<StreamScreen> {
   final _voice = VoiceService();
   late final _warnings = WarningClient(
     onWarning: _onWarning,
-    onConnectionChanged: (connected) {
-      if (mounted) setState(() => _warningsConnected = connected);
+    onStatusChanged: (status) {
+      if (mounted) setState(() => _warningStatus = status);
     },
   );
   StreamStatus _status = StreamStatus.idle;
   String _errorText = '';
   String _serverIp = '';
-  bool _mock = true;
-  bool _warningsConnected = false;
+  WarningStatus _warningStatus = WarningStatus.off;
   String _lastWarning = '';
 
   @override
@@ -75,10 +74,7 @@ class _StreamScreenState extends State<StreamScreen> {
   Future<void> _loadSettings() async {
     final settings = await SettingsStore.load();
     if (!mounted) return;
-    setState(() {
-      _serverIp = settings.serverIp;
-      _mock = settings.mock;
-    });
+    setState(() => _serverIp = settings.serverIp);
     _warnings.start(settings);
   }
 
@@ -140,11 +136,13 @@ class _StreamScreenState extends State<StreamScreen> {
         StreamStatus.error => 'Error: $_errorText',
       };
 
-  String get _warningsText {
-    if (_mock) return 'Warnings: mock (every 30 s)';
-    if (_serverIp.isEmpty) return 'Warnings: off';
-    return _warningsConnected ? 'Warnings: connected' : 'Warnings: reconnecting…';
-  }
+  String get _warningsText => switch (_warningStatus) {
+        WarningStatus.off => 'Warnings: off (no server IP)',
+        WarningStatus.mock => 'Warnings: mock (every 30 s)',
+        WarningStatus.connecting => 'Warnings: server not reachable, retrying…',
+        WarningStatus.connected => 'Warnings: connected',
+        WarningStatus.notOnServer => 'Warnings: not available on this server yet',
+      };
 
   Color get _statusColor => switch (_status) {
         StreamStatus.live => kOk,

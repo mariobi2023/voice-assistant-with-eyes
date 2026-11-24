@@ -66,6 +66,10 @@ class _AskPanelState extends State<AskPanel> {
       return;
     }
     setState(() => _question = question);
+    if (!settings.mock && settings.serverIp.isEmpty) {
+      await _say(lang.noServerIp, lang);
+      return;
+    }
 
     // 2) Ask (mock or real backend).
     _setState(AskState.thinking);
@@ -75,8 +79,12 @@ class _AskPanelState extends State<AskPanel> {
           ? await askMock(lang)
           : await askBackend(settings.serverIp, question, lang);
       answer = result.answer;
-    } catch (_) {
-      answer = lang.serverError; // no server, timeout (15 s), or bad reply
+    } on AskException catch (e) {
+      debugPrint('Ask failed: $e');
+      answer = e.message(lang); // "Server not reachable…", "took too long…" or "had a problem…"
+    } catch (e) {
+      debugPrint('Ask failed: $e');
+      answer = lang.serverError;
     }
 
     // 3) Speak the answer in the same language.

@@ -1,5 +1,5 @@
 // Settings saved on the phone (shared_preferences):
-//   - server IP   (laptop running MediaMTX + backend)
+//   - server IP   (laptop running MediaMTX on port 8889 AND the backend on port 8000)
 //   - language    (English / French / Arabic) for listening and speaking
 //   - mock mode   (fake answers + a fake warning every 30 s, no backend needed)
 import 'package:material_ui/material_ui.dart';
@@ -26,7 +26,7 @@ class SettingsStore {
     return AppSettings(
       serverIp: prefs.getString(_ipKey) ?? '',
       language: languageFromCode(prefs.getString(_languageKey) ?? 'en'),
-      mock: prefs.getBool(_mockKey) ?? true, // ON by default until the backend exists
+      mock: prefs.getBool(_mockKey) ?? false, // OFF by default: use the real backend
     );
   }
 
@@ -48,7 +48,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final _ipController = TextEditingController();
   AppLanguage _language = english;
-  bool _mock = true;
+  bool _mock = false;
   String? _error;
 
   @override

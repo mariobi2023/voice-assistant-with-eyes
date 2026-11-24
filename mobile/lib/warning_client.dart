@@ -16,6 +16,15 @@ const Duration kConnectTimeout = Duration(seconds: 5);
 const Duration kPingInterval = Duration(seconds: 10); // notices a dead Wi-Fi connection
 const Duration kMockWarningEvery = Duration(seconds: 30);
 
+// What the warnings line on the main screen shows.
+enum WarningStatus {
+  off, // no server IP set
+  mock, // fake warnings every 30 s
+  connecting, // trying to connect (or reconnecting after a drop)
+  connected, // listening for warnings
+  notOnServer, // the server is there but has no /ws endpoint (yet)
+}
+
 // One warning: the sentence to speak and its language.
 class Warning {
   const Warning(this.text, this.language);
@@ -62,10 +71,10 @@ Warning mockWarning(AppLanguage lang, int n) {
 // ---------- The client ----------
 
 class WarningClient {
-  WarningClient({required this.onWarning, this.onConnectionChanged});
+  WarningClient({required this.onWarning, this.onStatusChanged});
 
   final void Function(Warning warning) onWarning; // called for every warning
-  final void Function(bool connected)? onConnectionChanged; // for the status line
+  final void Function(WarningStatus status)? onStatusChanged; // for the status line
 
   WebSocket? _socket;
   Timer? _timer; // the reconnect timer, or the mock timer
@@ -79,10 +88,12 @@ class WarningClient {
     stop();
     final session = _session;
     if (settings.mock) {
+      onStatusChanged?.call(WarningStatus.mock);
       _timer = Timer.periodic(kMockWarningEvery, (_) {
         onWarning(mockWarning(settings.language, _mockCount++));
       });
     } else if (settings.serverIp.isNotEmpty) {
+      onStatusChanged?.call(WarningStatus.connecting);
       _connect(settings, session);
     }
   }
@@ -94,7 +105,7 @@ class WarningClient {
     _timer = null;
     _socket?.close();
     _socket = null;
-    onConnectionChanged?.call(false);
+    onStatusChanged?.call(WarningStatus.off);
   }
 
   Future<void> _connect(AppSettings settings, int session) async {
@@ -110,7 +121,7 @@ class WarningClient {
       }
       socket.pingInterval = kPingInterval;
       _socket = socket;
-      onConnectionChanged?.call(true);
+      onStatusChanged?.call(WarningStatus.connected);
 
       socket.listen(
         (message) {
@@ -122,16 +133,21 @@ class WarningClient {
         onError: (_) => _reconnectLater(settings, session),
         cancelOnError: true, // after an error, onDone is not called too
       );
+    } on WebSocketException {
+      // The server answered, but refused the WebSocket: it has no /ws endpoint yet.
+      // Keep trying, so warnings start working as soon as the backend adds it.
+      _reconnectLater(settings, session, WarningStatus.notOnServer);
     } catch (_) {
       _reconnectLater(settings, session); // server not reachable (yet)
     }
   }
 
   // The connection is gone: try again in a few seconds (forever, until stop()).
-  void _reconnectLater(AppSettings settings, int session) {
+  void _reconnectLater(AppSettings settings, int session,
+      [WarningStatus status = WarningStatus.connecting]) {
     if (session != _session) return;
     _socket = null;
-    onConnectionChanged?.call(false);
+    onStatusChanged?.call(status);
     _timer = Timer(kReconnectDelay, () => _connect(settings, session));
   }
 }

@@ -33,7 +33,7 @@ void main() {
     final saved = await SettingsStore.load();
     expect(saved.serverIp, '192.168.1.20');
     expect(saved.language.code, 'fr');
-    expect(saved.mock, true); // mock is on by default
+    expect(saved.mock, false); // mock is off by default: real backend
   });
 
   testWidgets('Settings screen rejects a full URL', (tester) async {
@@ -88,6 +88,17 @@ void main() {
         expect(w.language, lang);
         expect(removeSafeClaims(w.text), w.text);
       }
+    }
+  });
+
+  test('Server error messages exist in every language and never say "safe"', () {
+    for (final lang in allLanguages) {
+      for (final kind in AskFailure.values) {
+        final text = AskException(kind, '').message(lang);
+        expect(text, isNotEmpty);
+        expect(removeSafeClaims(text), text);
+      }
+      expect(removeSafeClaims(lang.noServerIp), lang.noServerIp);
     }
   });
 }

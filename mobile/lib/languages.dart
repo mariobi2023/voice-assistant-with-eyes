@@ -8,6 +8,9 @@ class AppLanguage {
     required this.ttsLocale,
     required this.isRtl,
     required this.didNotHear,
+    required this.noServerIp,
+    required this.serverUnreachable,
+    required this.serverTimeout,
     required this.serverError,
     required this.notSure,
   });
@@ -18,7 +21,10 @@ class AppLanguage {
   final String ttsLocale; // flutter_tts voice
   final bool isRtl; // Arabic is written right-to-left
   final String didNotHear; // spoken when no question was heard
-  final String serverError; // spoken when the backend can't be reached
+  final String noServerIp; // no IP in Settings (and mock mode is off)
+  final String serverUnreachable; // nothing answers at that IP (wrong IP, other Wi-Fi, server off)
+  final String serverTimeout; // the server did not answer within 15 s
+  final String serverError; // the server answered, but with an error
   final String notSure; // the "I'm not sure" answer
 }
 
@@ -29,7 +35,10 @@ const english = AppLanguage(
   ttsLocale: 'en-US',
   isRtl: false,
   didNotHear: "I didn't hear a question. Please try again.",
-  serverError: "I can't reach the server right now.",
+  noServerIp: 'No server IP set. Please open Settings.',
+  serverUnreachable: 'Server not reachable. Check the IP and the Wi-Fi.',
+  serverTimeout: 'The server took too long to answer. Please try again.',
+  serverError: 'The server had a problem. Please try again.',
   notSure: "I'm not sure.",
 );
 
@@ -40,7 +49,10 @@ const french = AppLanguage(
   ttsLocale: 'fr-FR',
   isRtl: false,
   didNotHear: "Je n'ai pas entendu de question. Veuillez réessayer.",
-  serverError: "Je n'arrive pas à joindre le serveur.",
+  noServerIp: "Aucune adresse IP de serveur. Ouvrez les réglages.",
+  serverUnreachable: "Serveur injoignable. Vérifiez l'adresse IP et le Wi-Fi.",
+  serverTimeout: 'Le serveur a mis trop de temps à répondre. Veuillez réessayer.',
+  serverError: 'Le serveur a rencontré un problème. Veuillez réessayer.',
   notSure: 'Je ne suis pas sûr.',
 );
 
@@ -51,7 +63,10 @@ const arabic = AppLanguage(
   ttsLocale: 'ar-SA',
   isRtl: true,
   didNotHear: 'لم أسمع سؤالاً. حاول مرة أخرى.',
-  serverError: 'لا أستطيع الوصول إلى الخادم الآن.',
+  noServerIp: 'لم يتم تعيين عنوان الخادم. افتح الإعدادات.',
+  serverUnreachable: 'لا يمكن الوصول إلى الخادم. تحقق من عنوان IP والواي فاي.',
+  serverTimeout: 'استغرق الخادم وقتاً طويلاً للرد. حاول مرة أخرى.',
+  serverError: 'حدثت مشكلة في الخادم. حاول مرة أخرى.',
   notSure: 'لست متأكداً.',
 );
 
