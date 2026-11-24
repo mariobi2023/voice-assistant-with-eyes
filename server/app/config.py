@@ -28,6 +28,18 @@ SHARPNESS_MIN = 10.0        # Laplacian variance; below this the frame is too bl
 HASH_MIN = 5                # pHash distance to the last kept frame; below this = same scene → drop
 DARK_MAX = 60.0             # mean brightness (0-255) below which a frame counts as "dark"
 
+# ---------- Image enhancement (enhance.py), before OCR and YOLO ----------
+# Dark frames (brightness < DARK_MAX) are brightened BEFORE the sharpness check:
+# dark images have weak edges, so without this they were dropped as "blurry".
+CLAHE_CLIP_LIMIT = 2.0      # CLAHE contrast limit; higher = stronger boost, but more noise
+CLAHE_TILE_GRID = 8         # CLAHE works on an 8x8 grid of tiles (local contrast)
+GAMMA_TARGET_BRIGHTNESS = 110.0  # gamma correction aims for about this mean brightness
+GAMMA_MIN = 0.4             # strongest brightening allowed (lower gamma = brighter)
+# Frames with SHARPNESS_MIN <= sharpness < SLIGHTLY_BLURRY_MAX get a mild unsharp mask.
+SLIGHTLY_BLURRY_MAX = 100.0
+UNSHARP_SIGMA = 2.0         # size of the blur subtracted by the unsharp mask (pixels)
+UNSHARP_AMOUNT = 0.6        # sharpening strength; ~0.5-1.0 is "mild", more gives halos
+
 # ---------- Storage ----------
 FRAMES_DIR = SERVER_DIR / "frames"  # JPEG files of kept frames
 FRAME_MAX_WIDTH = 960       # resize wider frames before saving (smaller files, faster OCR later)
@@ -77,6 +89,18 @@ YOLO_CLASSES = [
     "bicycle", "bus", "traffic light", "stop sign", "bench", "trash can", "window",
     "sign", "pole", "escalator", "toilet", "sink", "laptop", "bottle", "cup", "bag",
 ]
+
+# ---------- Unprompted alerts: "Stairs ahead." / "Door ahead." (alerts.py) ----------
+ALERT_LABELS = {"stairs": "stairs", "door": "door"}  # alert type -> YOLO class (in YOLO_CLASSES)
+ALERT_MIN_CONF = 0.40       # "good confidence": higher than YOLO_MIN_CONF so weak guesses don't alert. Tune.
+ALERT_COOLDOWN_SECONDS = 10  # the same alert type at most once every 10 s (no repeats)
+ALERT_MAX_AGE_SECONDS = 8   # older alerts are not given any more: "ahead" would no longer be true
+ALERT_HISTORY_MAX = 50      # alerts kept in memory for GET /alerts and GET /events
+
+# GET /events (Server-Sent Events): the phone keeps one connection open, alerts are pushed to it.
+EVENTS_CHECK_SECONDS = 0.25     # how often each open connection looks for new alerts (max extra delay)
+EVENTS_KEEPALIVE_SECONDS = 15   # send a small "ping" comment when quiet, so proxies/phones don't cut the line
+EVENTS_RETRY_MS = 2000          # tells the phone: if the connection drops, reconnect after 2 s
 
 # ---------- Embeddings ----------
 # 384 dimensions (matches vector(384)). Loaded from MODELS_DIR/<name>/ if present, else from Hugging Face.

@@ -4,8 +4,10 @@ Reads the camera stream from MediaMTX (RTSP), checks about SAMPLE_FPS frames per
 and keeps only frames that are:
   1. sharp enough  (Laplacian variance >= SHARPNESS_MIN), and
   2. a new scene   (pHash distance to the last kept frame >= HASH_MIN).
+Dark frames are brightened (before check 1) and slightly blurry ones sharpened (enhance.py).
 Kept frames are saved as JPEG in server/frames/ and as a row in the frames table.
-A second thread (VisionWorker) then adds OCR text, objects, caption and embedding to the row.
+A second thread (VisionWorker) then adds OCR text, objects, caption and embedding to the row,
+and creates "Stairs ahead." / "Door ahead." alerts (alerts.py) as soon as the objects are known.
 
 Everything runs in background threads, so the web server (/ask) is never blocked.
 Test on its own:   python -m app.ingest   (ingest + vision + database + retention)
@@ -24,7 +26,7 @@ import imagehash
 import numpy as np
 from PIL import Image
 
-from app import config, db, embeddings, privacy, retention, vision
+from app import alerts, config, db, embeddings, enhance, privacy, retention, vision
 from app.migrate import apply_migrations
 
 log = logging.getLogger("ingest")
@@ -238,12 +240,26 @@ class Ingestor:
         """The checks + saving (see process_frame). Runs under _keep_lock."""
         frame = resize_to_max_width(frame, config.FRAME_MAX_WIDTH)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        brightness = measure_brightness(gray)  # of the ORIGINAL frame (stored in the database)
+        enhanced = False
+
+        # Enhancement 1: dark? Brighten BEFORE the sharpness check: dark images have weak
+        # edges, so they would otherwise be dropped as "blurry".
+        if enhance.is_dark(brightness):
+            frame = enhance.brighten(frame)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            enhanced = True
 
         # Check 1: sharp?
         sharpness = measure_sharpness(gray)
         if sharpness < config.SHARPNESS_MIN:
             log.info("Frame dropped: blurry (sharpness %.0f < %.0f)", sharpness, config.SHARPNESS_MIN)
             return None
+
+        # Enhancement 2: only slightly blurry? A mild unsharp mask helps OCR read the text.
+        if enhance.is_slightly_blurry(sharpness):
+            frame = enhance.sharpen(frame)
+            enhanced = True
 
         # Check 2: new scene? (subtracting two hashes gives the number of different bits)
         frame_hash = compute_phash(frame)
@@ -262,7 +278,6 @@ class Ingestor:
             return None
 
         # Kept: save it and remember its hash for the next comparison.
-        brightness = measure_brightness(gray)
         image_path = save_jpeg(frame, captured_at)
         self._last_hash = frame_hash
         info = {
@@ -270,10 +285,11 @@ class Ingestor:
             "image_path": image_path,
             "sharpness": sharpness,
             "brightness": brightness,
-            "is_dark": brightness < config.DARK_MAX,  # not used yet: for dark-image enhancement
+            "enhanced": enhanced,  # saved in the database; the dashboard shows an "enhanced" tag
         }
-        log.info("Frame kept%s: %s (sharpness %.0f, brightness %.0f, %d face(s) blurred)",
-                 " (live, for a question)" if live else "", image_path, sharpness, brightness, faces)
+        log.info("Frame kept%s%s: %s (sharpness %.0f, brightness %.0f, %d face(s) blurred)",
+                 " (live, for a question)" if live else "", " (enhanced)" if enhanced else "",
+                 image_path, sharpness, brightness, faces)
 
         if self.on_frame_kept:
             try:
@@ -295,7 +311,7 @@ class VisionWorker:
     """
 
     def __init__(self):
-        self._queue = queue.Queue(maxsize=config.VISION_QUEUE_MAX)  # (frame_id, frame) waiting
+        self._queue = queue.Queue(maxsize=config.VISION_QUEUE_MAX)  # (frame_id, frame, captured_at) waiting
         self._stop_event = threading.Event()
         self._thread = None
 
@@ -310,32 +326,41 @@ class VisionWorker:
         """Ask the thread to finish (it checks every second)."""
         self._stop_event.set()
 
-    def submit(self, frame_id, frame):
+    def submit(self, frame_id, frame, captured_at):
         """Queue a frame for analysis. If the queue is full, skip the OLDEST waiting frame:
         fresh frames matter most for 'what is in front of me'."""
+        item = (frame_id, frame, captured_at)
         try:
-            self._queue.put_nowait((frame_id, frame))
+            self._queue.put_nowait(item)
         except queue.Full:
-            skipped_id, _ = self._queue.get_nowait()
+            skipped_id, _, _ = self._queue.get_nowait()
             log.info("Vision busy: frame %d skipped analysis (kept without OCR/objects)", skipped_id)
-            self._queue.put_nowait((frame_id, frame))
+            self._queue.put_nowait(item)
 
     def _run(self):
         """Take frames from the queue and analyze them until stopped."""
         while not self._stop_event.is_set():
             try:
-                frame_id, frame = self._queue.get(timeout=1)
+                frame_id, frame, captured_at = self._queue.get(timeout=1)
             except queue.Empty:
                 continue
             try:
-                self.analyze_and_store(frame_id, frame)
+                self.analyze_and_store(frame_id, frame, captured_at)
             except Exception:
                 log.exception("Vision failed for frame %d", frame_id)  # keep the thread alive
 
-    def analyze_and_store(self, frame_id, frame):
-        """OCR + objects + caption + embedding for one frame, saved into its database row."""
+    def analyze_and_store(self, frame_id, frame, captured_at):
+        """Objects + OCR + caption + embedding for one frame, saved into its database row.
+        As soon as the objects are known (before slow OCR), check for stairs/door alerts."""
         started = time.monotonic()
-        analysis = vision.analyze_frame(frame)
+
+        def check_alerts(objects):
+            try:
+                alerts.check_objects(frame_id, objects, captured_at)
+            except Exception:
+                log.exception("Alert check failed for frame %d", frame_id)  # never stop the analysis
+
+        analysis = vision.analyze_frame(frame, on_objects=check_alerts)
         text = embeddings.build_frame_text(analysis["ocr_text"], analysis["caption"])
         embedding = embeddings.embed_text(text)  # None if nothing was read or seen
         if not db.update_frame_vision(frame_id, analysis, embedding):
@@ -381,7 +406,7 @@ def start_pipeline():
         """on_frame_kept: save the row right away (fast), then queue the frame for analysis."""
         info["id"] = db.insert_frame(info)
         log.info("Frame stored in database with id %d", info["id"])
-        vision_worker.submit(info["id"], frame)
+        vision_worker.submit(info["id"], frame, info["captured_at"])
 
     global _running_ingestor
     ingestor = Ingestor(on_frame_kept=store_and_queue)
