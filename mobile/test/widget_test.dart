@@ -1,7 +1,5 @@
 // Small tests that need no camera, microphone or network.
 // Run with: flutter test
-import 'dart:convert';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -61,33 +59,33 @@ void main() {
     }
   });
 
-  test('SSE messages from /events are read correctly', () {
+  test('An alert from the server (/events) is read correctly', () {
+    // The exact lines the server sends for one alert, then a keep-alive ping.
     final parser = SseParser();
     final lines = [
       'retry: 2000',
-      ': connected', // comment: ignored
-      '',
-      ': ping',
+      ': connected',
       '',
       'id: 1795000012',
       'event: alert',
-      'data: {"id": 1795000012, "type": "stairs", "text": "Escalier devant vous.", "conf": 0.6}',
+      'data: {"id": 1795000012, "type": "stairs", "text": "درج أمامك.", "conf": 0.8}',
+      '',
+      ': ping',
       '',
     ];
-    final messages = [for (final l in lines) parser.addLine(l)].whereType<SseEvent>().toList();
-    expect(messages.length, 1); // pings and comments produce no message
-    expect(messages.single.event, 'alert');
-    expect(messages.single.id, '1795000012');
-    expect(parser.retryMs, 2000);
+    final events = [for (final l in lines) parser.addLine(l)].whereType<(String, String)>().toList();
+    expect(events.length, 1); // comments and pings are not events
+    expect(events.single.$1, 'alert');
 
-    final w = parseAlert(jsonDecode(messages.single.data), french)!;
+    final w = parseAlert(events.single.$2, arabic);
+    expect(w!.text, 'درج أمامك.');
+    expect(w.language.code, 'ar'); // the language we asked the server for
     expect(w.id, 1795000012);
-    expect(w.text, 'Escalier devant vous.');
-    expect(w.language.code, 'fr'); // the language we asked for (?language=fr)
 
-    // Not an alert (no id), or not JSON object → ignored.
-    expect(parseAlert({'text': 'Door ahead.'}, english), isNull);
-    expect(parseAlert('Door ahead.', english), isNull);
+    // Broken JSON, no id, or empty text → ignored.
+    expect(parseAlert('not json', english), isNull);
+    expect(parseAlert('{"text":"Door ahead."}', english), isNull);
+    expect(parseAlert('{"id":1,"text":""}', english), isNull);
   });
 
   test('Warnings never say "safe"', () {
@@ -95,19 +93,7 @@ void main() {
     expect(removeSafeClaims('Escalier devant vous. Le passage est sans danger.'), 'Escalier devant vous.');
     expect(removeSafeClaims('Je ne suis pas sûr.'), 'Je ne suis pas sûr.'); // "not sure" is allowed
     expect(removeSafeClaims('الطريق آمن.'), '');
-    expect(parseAlert({'id': 7, 'text': 'Door ahead. It is safe.'}, english)!.text, 'Door ahead.');
-  });
-
-  test('A warning is never spoken twice (ids from /events and /alerts)', () {
-    final spoken = <String>[];
-    final client = WarningClient(onWarning: (w) => spoken.add(w.text));
-    client.deliver(Warning('Stairs ahead.', english, 100));
-    client.deliver(Warning('Stairs ahead.', english, 100)); // same alert again after a reconnect
-    client.deliver(Warning('Old alert.', english, 99)); // older than the last one spoken
-    client.deliver(Warning('', english, 101)); // only said "safe": nothing to say...
-    client.deliver(Warning('Door ahead.', english, 102));
-    expect(spoken, ['Stairs ahead.', 'Door ahead.']);
-    expect(client.lastId, 102); // ...but its id is remembered (sent as after_id)
+    expect(parseAlert('{"id":1,"text":"It is safe."}', english), isNull);
   });
 
   test('Mock warnings are in the chosen language and never say "safe"', () {

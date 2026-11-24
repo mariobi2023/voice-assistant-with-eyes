@@ -14,21 +14,14 @@
     "Streaming started" or that it could not start.
   - The first time, it says "Press volume up to ask a question." in the chosen language.
 - **One server IP** in Settings is used for everything: MediaMTX on port 8889 (streaming)
-  and the backend on port 8000 (`/ask`, `/events`, `/alerts`).
+  and the backend on port 8000 (`/ask`, `/ws`).
 - **Clear errors**, spoken in the user's language: no server IP set, server not reachable
   (check the IP and Wi-Fi), server too slow (15 s), or server problem.
-- **Warnings** (no question needed, e.g. "Stairs ahead."): keeps
-  `GET http://<server-ip>:8000/events?language=<code>&after_id=<last id>` open
-  (Server-Sent Events, Dart's built-in `HttpClient`) and reads each `event: alert` message
-  (`{"id", "type", "text", ...}`). Vibrates 3 times and speaks the text; if an answer is being
-  spoken, the warning comes right after it.
-  - **Never twice:** remembers the last alert id and sends it back on reconnect
-    (`after_id` + `Last-Event-ID` header); older or repeated ids are ignored.
-  - **Reconnects** after the server's `retry` delay (2 s); 40 s without even a ping = dead line.
-  - **Fallback:** after 3 failed `/events` attempts, polls `GET /alerts` every 1 s (and tries
-    `/events` again every 60 s).
-  - Any sentence saying "safe" is still removed. In mock mode a fake warning comes every 30 s
-    in the chosen language.
+- **Warnings** (no question needed): listens on `ws://<server-ip>:8000/ws` for
+  `{"type":"warning","data":{"text":"...","language":"en"}}`, vibrates 3 times and speaks the
+  text. If an answer is being spoken, the warning is spoken right after it. Reconnects every
+  3 s if the connection drops. Any sentence saying "safe" is removed. In mock mode a fake
+  warning comes every 30 s in the chosen language.
 
 ## Files
 
@@ -40,14 +33,13 @@
 | `lib/whip_client.dart` | Opens the back camera and publishes it to MediaMTX via WHIP |
 | `lib/ask_panel.dart` | Big Ask button: vibrate → listen → vibrate → ask → speak |
 | `lib/voice_service.dart` | speech_to_text (listen) and flutter_tts (speak, one sentence at a time) |
-| `lib/warning_client.dart` | Warnings: SSE client for `/events`, `/alerts` polling fallback, no repeats, mock warnings |
+| `lib/warning_client.dart` | Server-Sent Events `GET /events` for warnings, auto-reconnect, mock warnings |
 | `lib/assistant_client.dart` | `POST /ask` to the backend (15 s timeout), error kinds, mock answers |
 | `lib/languages.dart` | English / French / Arabic: locales, the app's own sentences, "safe" filter |
 | `lib/settings.dart` | Settings screen: server IP, language, mock mode (saved on the phone) |
 | `android/app/src/main/kotlin/.../MainActivity.kt` | Catches volume up and sends it to Dart (`voice_assistant_eyes/keys`) |
 | `android/app/src/main/AndroidManifest.xml` | Camera, microphone, internet permissions; plain `http://`; speech + TTS services |
-| `test/widget_test.dart` | Settings save/reject tests, mock answers, SSE/alert parsing, "safe" filter, no repeats |
-| `test/warning_client_test.dart` | Warning client against a fake local server: reconnect with `Last-Event-ID`, polling fallback |
+| `test/widget_test.dart` | Settings save/reject tests, mock answers, warning parsing and "safe" filter |
 
 ## Run (once the Android NDK is installed)
 
