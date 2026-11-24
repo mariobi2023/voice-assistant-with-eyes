@@ -5,6 +5,14 @@
 - **Ask** button: listens (speech_to_text), sends `{"question","language"}` to
   `POST http://<server-ip>:8000/ask`, and speaks the answer (flutter_tts).
   English, French and Arabic. A **mock mode** (off by default) gives fake answers without a backend.
+- **Hands-free** (no need to look at the screen):
+  - **Volume up** = Ask (press again to stop listening / speaking). Only while the app is
+    open; volume up does not change the volume then. Volume down works normally.
+  - **TalkBack off**: tap anywhere on the main screen = Ask (except Settings and
+    Start/Stop). **TalkBack on**: normal accessible buttons only.
+  - Streaming **starts by itself** when the app opens if a server IP is set, and says
+    "Streaming started" or that it could not start.
+  - The first time, it says "Press volume up to ask a question." in the chosen language.
 - **One server IP** in Settings is used for everything: MediaMTX on port 8889 (streaming)
   and the backend on port 8000 (`/ask`, `/ws`).
 - **Clear errors**, spoken in the user's language: no server IP set, server not reachable
@@ -21,6 +29,7 @@
 |---|---|
 | `lib/main.dart` | Starts the app, high-contrast theme (black / white / yellow) |
 | `lib/stream_screen.dart` | Status text, camera preview, big Start/Stop streaming button, Ask panel |
+| `lib/hardware_keys.dart` | Receives the volume-up button from `MainActivity.kt` (MethodChannel) |
 | `lib/whip_client.dart` | Opens the back camera and publishes it to MediaMTX via WHIP |
 | `lib/ask_panel.dart` | Big Ask button: vibrate → listen → vibrate → ask → speak |
 | `lib/voice_service.dart` | speech_to_text (listen) and flutter_tts (speak, one sentence at a time) |
@@ -28,6 +37,7 @@
 | `lib/assistant_client.dart` | `POST /ask` to the backend (15 s timeout), error kinds, mock answers |
 | `lib/languages.dart` | English / French / Arabic: locales, the app's own sentences, "safe" filter |
 | `lib/settings.dart` | Settings screen: server IP, language, mock mode (saved on the phone) |
+| `android/app/src/main/kotlin/.../MainActivity.kt` | Catches volume up and sends it to Dart (`voice_assistant_eyes/keys`) |
 | `android/app/src/main/AndroidManifest.xml` | Camera, microphone, internet permissions; plain `http://`; speech + TTS services |
 | `test/widget_test.dart` | Settings save/reject tests, mock answers, warning parsing and "safe" filter |
 

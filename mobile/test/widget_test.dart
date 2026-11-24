@@ -101,4 +101,25 @@ void main() {
       expect(removeSafeClaims(lang.noServerIp), lang.noServerIp);
     }
   });
+
+  test('Hands-free sentences exist in every language and never say "safe"', () {
+    for (final lang in allLanguages) {
+      for (final text in [
+        lang.volumeHint,
+        lang.streamingStarted,
+        lang.streamingFailed,
+        lang.streamingLost,
+      ]) {
+        expect(text, isNotEmpty);
+        expect(removeSafeClaims(text), text);
+      }
+    }
+  });
+
+  test('The volume-up hint is spoken only the first time', () async {
+    SharedPreferences.setMockInitialValues({}); // a phone that never opened the app
+    expect(await SettingsStore.isFirstHint(), true);
+    expect(await SettingsStore.isFirstHint(), false);
+    expect(await SettingsStore.isFirstHint(), false);
+  });
 }
