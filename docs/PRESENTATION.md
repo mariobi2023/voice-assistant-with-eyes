@@ -131,7 +131,7 @@ Why: free tools, run on a normal laptop CPU, multilingual.
 6. Switch language → ask in **French** or **Arabic**.
 7. Ask about something never seen → **"I'm not sure"**.
 8. Show the timeline: faces blurred, frames older than 30 min are gone.
-9. Warning (mock mode or backend `/ws` if ready): phone vibrates and speaks it.
+9. Warning: point at stairs or a door (backend `/events`), or use mock mode: phone vibrates and speaks it.
 
 Backup plan: mock mode in the app and `VITE_USE_MOCK=true` on the dashboard if the network fails.
 
@@ -194,7 +194,7 @@ Details: [TEAM.md](TEAM.md).
 
 ## Slide 14 — Next steps and questions
 
-- Backend `/ws` warnings, dark/blurry image enhancement, full test results.
+- Merge the backend warnings (`/events`) and image enhancement, full test results.
 - Questions.
 
 **Speaker:** both

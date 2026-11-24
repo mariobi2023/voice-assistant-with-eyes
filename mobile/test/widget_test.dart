@@ -1,5 +1,7 @@
 // Small tests that need no camera, microphone or network.
 // Run with: flutter test
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -59,18 +61,33 @@ void main() {
     }
   });
 
-  test('A warning message from the server is read correctly', () {
-    final w = parseWarning('{"type":"warning","data":{"text":"Attention : escalier.","language":"fr"}}', english);
-    expect(w!.text, 'Attention : escalier.');
-    expect(w.language.code, 'fr');
+  test('SSE messages from /events are read correctly', () {
+    final parser = SseParser();
+    final lines = [
+      'retry: 2000',
+      ': connected', // comment: ignored
+      '',
+      ': ping',
+      '',
+      'id: 1795000012',
+      'event: alert',
+      'data: {"id": 1795000012, "type": "stairs", "text": "Escalier devant vous.", "conf": 0.6}',
+      '',
+    ];
+    final messages = [for (final l in lines) parser.addLine(l)].whereType<SseEvent>().toList();
+    expect(messages.length, 1); // pings and comments produce no message
+    expect(messages.single.event, 'alert');
+    expect(messages.single.id, '1795000012');
+    expect(parser.retryMs, 2000);
 
-    // Unknown language → the language chosen in Settings.
-    expect(parseWarning('{"type":"warning","data":{"text":"Door ahead."}}', arabic)!.language.code, 'ar');
+    final w = parseAlert(jsonDecode(messages.single.data), french)!;
+    expect(w.id, 1795000012);
+    expect(w.text, 'Escalier devant vous.');
+    expect(w.language.code, 'fr'); // the language we asked for (?language=fr)
 
-    // Not a warning, broken JSON, or empty text → ignored.
-    expect(parseWarning('{"type":"frame","data":{}}', english), isNull);
-    expect(parseWarning('not json', english), isNull);
-    expect(parseWarning('{"type":"warning","data":{"text":""}}', english), isNull);
+    // Not an alert (no id), or not JSON object → ignored.
+    expect(parseAlert({'text': 'Door ahead.'}, english), isNull);
+    expect(parseAlert('Door ahead.', english), isNull);
   });
 
   test('Warnings never say "safe"', () {
@@ -78,7 +95,19 @@ void main() {
     expect(removeSafeClaims('Escalier devant vous. Le passage est sans danger.'), 'Escalier devant vous.');
     expect(removeSafeClaims('Je ne suis pas sûr.'), 'Je ne suis pas sûr.'); // "not sure" is allowed
     expect(removeSafeClaims('الطريق آمن.'), '');
-    expect(parseWarning('{"type":"warning","data":{"text":"It is safe."}}', english), isNull);
+    expect(parseAlert({'id': 7, 'text': 'Door ahead. It is safe.'}, english)!.text, 'Door ahead.');
+  });
+
+  test('A warning is never spoken twice (ids from /events and /alerts)', () {
+    final spoken = <String>[];
+    final client = WarningClient(onWarning: (w) => spoken.add(w.text));
+    client.deliver(Warning('Stairs ahead.', english, 100));
+    client.deliver(Warning('Stairs ahead.', english, 100)); // same alert again after a reconnect
+    client.deliver(Warning('Old alert.', english, 99)); // older than the last one spoken
+    client.deliver(Warning('', english, 101)); // only said "safe": nothing to say...
+    client.deliver(Warning('Door ahead.', english, 102));
+    expect(spoken, ['Stairs ahead.', 'Door ahead.']);
+    expect(client.lastId, 102); // ...but its id is remembered (sent as after_id)
   });
 
   test('Mock warnings are in the chosen language and never say "safe"', () {
