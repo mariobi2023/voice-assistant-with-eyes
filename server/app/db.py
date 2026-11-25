@@ -59,18 +59,31 @@ def insert_frame(info):
     return row[0]
 
 
-def update_frame_vision(frame_id, analysis, embedding):
-    """Fill in OCR text, objects, caption and embedding of a frame (after vision ran).
-    Returns False if the frame no longer exists (already deleted by retention)."""
+def update_frame_objects(frame_id, objects, caption):
+    """Fast vision lane: save the YOLO objects + caption of a frame.
+    Returns the row's (ocr_text, caption) after the update, so the caller can build the
+    embedding text, or None if the frame no longer exists (already deleted by retention)."""
     with get_pool().connection() as conn:
-        cur = conn.execute(
-            """UPDATE frames
-               SET ocr_text = %s, ocr_conf = %s, objects = %s, caption = %s, embedding = %s
-               WHERE id = %s""",
-            (analysis["ocr_text"], analysis["ocr_conf"], Jsonb(analysis["objects"]),
-             analysis["caption"], embedding, frame_id),
-        )
-        return cur.rowcount == 1
+        return conn.execute(
+            "UPDATE frames SET objects = %s, caption = %s WHERE id = %s RETURNING ocr_text, caption",
+            (Jsonb(objects), caption, frame_id),
+        ).fetchone()
+
+
+def update_frame_ocr(frame_id, ocr_text, ocr_conf):
+    """Slow vision lane: save the OCR text of a frame.
+    Returns (ocr_text, caption) after the update, or None if the frame no longer exists."""
+    with get_pool().connection() as conn:
+        return conn.execute(
+            "UPDATE frames SET ocr_text = %s, ocr_conf = %s WHERE id = %s RETURNING ocr_text, caption",
+            (ocr_text, ocr_conf, frame_id),
+        ).fetchone()
+
+
+def update_frame_embedding(frame_id, embedding):
+    """Save the embedding of "objects + text" (recomputed each time one of the two lanes adds data)."""
+    with get_pool().connection() as conn:
+        conn.execute("UPDATE frames SET embedding = %s WHERE id = %s", (embedding, frame_id))
 
 
 def count_frames():

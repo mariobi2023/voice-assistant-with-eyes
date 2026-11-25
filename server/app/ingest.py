@@ -6,15 +6,15 @@ and keeps only frames that are:
   2. a new scene   (pHash distance to the last kept frame >= HASH_MIN).
 Dark frames are brightened (before check 1) and slightly blurry ones sharpened (enhance.py).
 Kept frames are saved as JPEG in server/frames/ and as a row in the frames table.
-A second thread (VisionWorker) then adds OCR text, objects, caption and embedding to the row,
-and creates "Stairs ahead." / "Door ahead." alerts (alerts.py) as soon as the objects are known.
+The VisionWorker then adds objects, caption, OCR text and embedding to the row in two lanes:
+a fast lane (YOLO, creates "Stairs ahead." / "Door ahead." alerts right away, see alerts.py)
+and a slow lane (OCR), so slow OCR never delays an alert.
 
 Everything runs in background threads, so the web server (/ask) is never blocked.
 Test on its own:   python -m app.ingest   (ingest + vision + database + retention)
 """
 import logging
 import os
-import queue
 import socket
 import sys
 import threading
@@ -318,71 +318,115 @@ class Ingestor:
 
 # ---------- The vision worker (OCR + YOLO + embedding) ----------
 
-class VisionWorker:
-    """Second background thread: analyzes stored frames one by one.
+class NewestSlot:
+    """A waiting place for ONE frame. Putting a new frame replaces an older one still waiting:
+    for alerts and for "what is in front of me", the freshest picture matters most."""
 
-    OCR takes 2-8 s per frame on a CPU. Doing it here, not in the Ingestor thread,
-    means slow OCR never makes us fall behind the live stream, and never blocks /ask.
+    def __init__(self):
+        self._item = None
+        self._changed = threading.Condition()
+
+    def put(self, item):
+        """Store `item`; return the older item it replaced (None if the slot was empty)."""
+        with self._changed:
+            replaced, self._item = self._item, item
+            self._changed.notify()
+        return replaced
+
+    def take(self, timeout):
+        """Return the waiting item and empty the slot, or None after `timeout` seconds."""
+        with self._changed:
+            if self._item is None:
+                self._changed.wait(timeout)
+            item, self._item = self._item, None
+        return item
+
+
+class VisionWorker:
+    """Analyzes stored frames in two background threads ("lanes"):
+
+    - fast lane: YOLO objects (~0.15 s) → stairs/door alerts right away → objects saved.
+    - slow lane: OCR (seconds on a CPU) on the newest frame whenever it is free → text saved.
+
+    Before, both ran one after the other in ONE thread: frames waited behind slow OCR, so
+    alerts were often older than ALERT_MAX_AGE_SECONDS and thrown away. Now OCR can't delay them.
+    None of this runs in the Ingestor thread, so the live stream and /ask are never blocked.
     """
 
     def __init__(self):
-        self._queue = queue.Queue(maxsize=config.VISION_QUEUE_MAX)  # (frame_id, frame, captured_at) waiting
+        self._fast_slot = NewestSlot()   # (frame_id, frame, captured_at) waiting for YOLO
+        self._ocr_slot = NewestSlot()    # (frame_id, frame, captured_at) waiting for OCR
+        self._save_lock = threading.Lock()  # both lanes update the same row + its embedding
         self._stop_event = threading.Event()
-        self._thread = None
 
     def start(self):
-        """Load the models, then start the analysis thread."""
+        """Load the models, then start both lanes."""
         vision.load_models()
         embeddings.get_model()
-        self._thread = threading.Thread(target=self._run, name="vision", daemon=True)
-        self._thread.start()
+        lanes = [("vision-fast", self._fast_slot, self.detect_and_alert),
+                 ("vision-ocr", self._ocr_slot, self.read_text)]
+        for name, slot, work in lanes:
+            threading.Thread(target=self._run, args=(slot, work), name=name, daemon=True).start()
 
     def stop(self):
-        """Ask the thread to finish (it checks every second)."""
+        """Ask both lanes to finish (they check every second)."""
         self._stop_event.set()
 
     def submit(self, frame_id, frame, captured_at):
-        """Queue a frame for analysis. If the queue is full, skip the OLDEST waiting frame:
-        fresh frames matter most for 'what is in front of me'."""
+        """Give a new frame to both lanes. A frame still waiting in a lane is replaced."""
         item = (frame_id, frame, captured_at)
-        try:
-            self._queue.put_nowait(item)
-        except queue.Full:
-            skipped_id, _, _ = self._queue.get_nowait()
-            log.info("Vision busy: frame %d skipped analysis (kept without OCR/objects)", skipped_id)
-            self._queue.put_nowait(item)
+        if self._fast_slot.put(item):
+            log.info("YOLO busy: an older frame skipped object detection")
+        skipped = self._ocr_slot.put(item)
+        if skipped:
+            log.debug("OCR busy: frame %d kept without text", skipped[0])  # normal on a CPU
 
-    def _run(self):
-        """Take frames from the queue and analyze them until stopped."""
+    def _run(self, slot, work):
+        """One lane: take the newest frame from its slot and analyze it, until stopped."""
         while not self._stop_event.is_set():
-            try:
-                frame_id, frame, captured_at = self._queue.get(timeout=1)
-            except queue.Empty:
+            item = slot.take(timeout=1)
+            if item is None:
                 continue
             try:
-                self.analyze_and_store(frame_id, frame, captured_at)
+                work(*item)
             except Exception:
-                log.exception("Vision failed for frame %d", frame_id)  # keep the thread alive
+                log.exception("Vision failed for frame %d", item[0])  # keep the thread alive
 
-    def analyze_and_store(self, frame_id, frame, captured_at):
-        """Objects + OCR + caption + embedding for one frame, saved into its database row.
-        As soon as the objects are known (before slow OCR), check for stairs/door alerts."""
+    def detect_and_alert(self, frame_id, frame, captured_at):
+        """Fast lane: objects → alerts (first, so they are as fresh as possible) → save."""
         started = time.monotonic()
+        objects = vision.detect_objects(frame)
+        delay = (datetime.now(timezone.utc) - captured_at).total_seconds()
+        try:
+            alerts.check_objects(frame_id, objects, captured_at)
+        except Exception:
+            log.exception("Alert check failed for frame %d", frame_id)  # still save the objects
+        caption = vision.build_caption(objects)
+        with self._save_lock:
+            row = db.update_frame_objects(frame_id, objects, caption)
+            self._save_embedding(frame_id, row)
+        log.info("Frame %d objects in %.2f s (%.1f s after capture): [%s]",
+                 frame_id, time.monotonic() - started, delay, caption)
 
-        def check_alerts(objects):
-            try:
-                alerts.check_objects(frame_id, objects, captured_at)
-            except Exception:
-                log.exception("Alert check failed for frame %d", frame_id)  # never stop the analysis
+    def read_text(self, frame_id, frame, captured_at):
+        """Slow lane: OCR → save the text (the embedding is rebuilt with the objects)."""
+        started = time.monotonic()
+        ocr_text, ocr_conf = vision.run_ocr(frame)
+        with self._save_lock:
+            row = db.update_frame_ocr(frame_id, ocr_text, ocr_conf)
+            self._save_embedding(frame_id, row)
+        log.info("Frame %d OCR in %.1f s: %r", frame_id, time.monotonic() - started, ocr_text)
 
-        analysis = vision.analyze_frame(frame, on_objects=check_alerts)
-        text = embeddings.build_frame_text(analysis["ocr_text"], analysis["caption"])
-        embedding = embeddings.embed_text(text)  # None if nothing was read or seen
-        if not db.update_frame_vision(frame_id, analysis, embedding):
+    def _save_embedding(self, frame_id, row):
+        """Embed "Objects: ... Text: ..." from the row as it is NOW (both lanes' results).
+        `row` is (ocr_text, caption) returned by the update, or None if the frame was deleted."""
+        if row is None:
             log.info("Frame %d was deleted before analysis finished", frame_id)
             return
-        log.info("Frame %d analyzed in %.1f s: text=%r objects=[%s]", frame_id,
-                 time.monotonic() - started, analysis["ocr_text"], analysis["caption"])
+        text = embeddings.build_frame_text(*row)
+        embedding = embeddings.embed_text(text)  # None if nothing was read or seen yet
+        if embedding is not None:
+            db.update_frame_embedding(frame_id, embedding)
 
 
 # ---------- Starting everything together ----------

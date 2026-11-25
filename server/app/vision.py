@@ -3,6 +3,7 @@
 - OCR:     EasyOCR. Two readers, because one reader cannot mix Arabic with French:
              ["en", "fr"] for English/French users, ["ar", "en"] for Arabic users.
            Only the reader of the ACTIVE language (the user's last question) is used.
+           Runs on a smaller copy of the frame (OCR_MAX_WIDTH): it is the slow step on a CPU.
 - Objects: Ultralytics YOLO-World with our own class list (normal YOLO has no "door" or "stairs").
 - Caption: a short text built from the object labels (no AI call per frame).
 
@@ -14,6 +15,8 @@ import logging
 import threading
 from collections import Counter
 
+import cv2
+
 from app import config
 
 log = logging.getLogger("vision")
@@ -21,8 +24,10 @@ log = logging.getLogger("vision")
 _ocr_readers = {}             # reader key ("latin" / "arabic") -> easyocr.Reader
 _yolo_model = None
 _load_lock = threading.Lock()  # load each model only once, even if two threads ask
-# The vision thread and the /benchmark endpoints share the same models: run them one at a time.
-_infer_lock = threading.Lock()
+# The vision threads and the /benchmark endpoints share the same models: each model runs one
+# frame at a time. One lock PER MODEL, so fast YOLO never waits behind slow OCR (alerts stay fresh).
+_ocr_lock = threading.Lock()
+_yolo_lock = threading.Lock()
 _active_language = config.DEFAULT_LANGUAGE
 
 
@@ -100,11 +105,22 @@ def load_models():
 
 # ---------- OCR ----------
 
+def shrink_for_ocr(frame):
+    """Smaller copy of the frame for OCR (at most OCR_MAX_WIDTH wide): OCR time grows with
+    the number of pixels, and signs are still readable at this size."""
+    height, width = frame.shape[:2]
+    if width <= config.OCR_MAX_WIDTH:
+        return frame
+    scale = config.OCR_MAX_WIDTH / width
+    return cv2.resize(frame, (config.OCR_MAX_WIDTH, int(height * scale)), interpolation=cv2.INTER_AREA)
+
+
 def run_ocr(frame, language=None):
     """Read the text in the frame. Returns (text, mean confidence), or ("", None) if none."""
     reader = get_ocr_reader(language or _active_language)
-    with _infer_lock:
-        results = reader.readtext(frame)  # list of (box, text, confidence)
+    small = shrink_for_ocr(frame)
+    with _ocr_lock:
+        results = reader.readtext(small)  # list of (box, text, confidence)
     kept = [(text.strip(), conf) for _box, text, conf in results
             if conf >= config.OCR_MIN_CONF and text.strip()]
     if not kept:
@@ -119,7 +135,7 @@ def run_ocr(frame, language=None):
 def detect_objects(frame):
     """Find our custom classes. Returns [{"label", "conf", "box": [x, y, w, h]}], best first."""
     model = get_yolo_model()
-    with _infer_lock:
+    with _yolo_lock:
         result = model.predict(frame, conf=config.YOLO_MIN_CONF,
                                imgsz=config.YOLO_IMAGE_SIZE, verbose=False)[0]
     objects = []
@@ -146,19 +162,3 @@ def build_caption(objects):
 def get_active_language():
     """The user's language (from their last question), used for alert texts."""
     return _active_language
-
-
-def analyze_frame(frame, on_objects=None):
-    """Run object detection + OCR on one frame and return the results as a dict.
-    Objects come FIRST (YOLO is fast, OCR takes seconds): on_objects(objects) is called
-    right away, so stairs/door alerts are not delayed by OCR."""
-    objects = detect_objects(frame)
-    if on_objects:
-        on_objects(objects)
-    ocr_text, ocr_conf = run_ocr(frame)
-    return {
-        "ocr_text": ocr_text,
-        "ocr_conf": ocr_conf,
-        "objects": objects,
-        "caption": build_caption(objects),
-    }

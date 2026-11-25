@@ -114,6 +114,22 @@ Testers (only with signed consent): _ · Vision: _ blind, _ low vision, _ sighte
 Main comments:
 - _
 
+## 5. Vision speed: frames analyzed and alert delay
+
+Command: `cd server` then `.venv\Scripts\python ..\tests\vision_throughput.py --seconds 180`
+
+Reference (2026-11-25, CPU laptop, frames replayed at 60/min). "Before" = one vision thread
+(YOLO then OCR, queue of 5); "after" = fast YOLO/alert lane + slow OCR lane on 640 px copies.
+
+| Measure | Before | After | This laptop |
+|---|---|---|---|
+| YOLO per frame | 0.14 s | 0.16 s | _ s |
+| OCR per frame (median) | 1.95 s | 1.19 s | _ s |
+| Frames with objects | 18 / min | 56 / min | _ / min |
+| Frames with OCR text | 18 / min | 22 / min | _ / min |
+| Alert delay (median / max) | 4.7 s / 5.2 s | 0.7 s / 3.4 s | _ s / _ s |
+| Alerts too old (> 8 s) | 0 % here, 100 % on a laptop with OCR ≈ 9.5 s | 0 % | _ % |
+
 ## Conclusions
 
 - What works well: _

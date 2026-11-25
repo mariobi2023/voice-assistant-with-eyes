@@ -93,14 +93,22 @@ Ingest thread (ingest.py), ~2 frames checked per second (SAMPLE_FPS = 2):
 3. New?     pHash distance to last kept frame >= HASH_MIN (5)  else drop
 4. Privacy  detect faces (YuNet, score >= 0.7) and blur them    if this fails → drop
 5. Save     JPEG to server/frames/<timestamp>.jpg + row in "frames" (no OCR yet)
-6. Queue    frame → vision worker (queue of 5; when full the OLDEST waiting frame is skipped)
+6. Submit   frame → both vision lanes (each holds only the NEWEST waiting frame)
 
-Vision thread (VisionWorker):
-7. OCR      EasyOCR with the reader of the user's current language (confidence >= 0.3)
-8. Objects  YOLO-World, our classes, confidence >= 0.25
+VisionWorker, two threads ("lanes"), so slow OCR never delays an alert:
+Fast lane (vision-fast), ~0.15 s per frame:
+7. Objects  YOLO-World, our classes, confidence >= 0.25
+8. Alerts   stairs/door >= 0.40 → "Stairs ahead." / "Door ahead." (alerts.py)
 9. Caption  built from the labels, e.g. "door, 2 chairs, exit sign" (no AI call per frame)
-10. Embed   embedding of "Objects: <caption>. Text: <ocr>" → UPDATE the row
+Slow lane (vision-ocr), 1-10 s per frame on a CPU, takes the newest frame when free:
+10. OCR     EasyOCR, reader of the user's current language, on a 640 px copy (confidence >= 0.3)
+After each lane: embedding of "Objects: <caption>. Text: <ocr>" → UPDATE the row
 ```
+
+Measured on a CPU laptop (frames replayed at 1/s, OCR ~2 s at 960 px):
+single lane → 18 of 60 frames/min analyzed, alert delay ~4.7 s; two lanes → objects on
+56/min, OCR on 22/min, alert delay ~0.7 s. On a slower CPU (OCR ~9.5 s) the single lane
+dropped every alert as older than 8 s.
 
 YOLO-World classes: door, stairs, person, chair, table, exit sign, elevator, car, bicycle, bus,
 traffic light, stop sign, bench, trash can, window, sign, pole, escalator, toilet, sink, laptop,

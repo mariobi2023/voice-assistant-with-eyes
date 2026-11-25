@@ -78,6 +78,7 @@ EASYOCR_DIR = MODELS_DIR / "easyocr"
 # One reader per language. en and fr share a reader; Arabic needs its own (EasyOCR can't mix them).
 OCR_READERS = {"en": ["en", "fr"], "fr": ["en", "fr"], "ar": ["ar", "en"]}
 OCR_MIN_CONF = 0.3          # ignore text pieces EasyOCR is less sure about
+OCR_MAX_WIDTH = 640         # OCR runs on a copy this wide (frames are 960): faster; tiny text may be lost. Tune.
 
 # ---------- Object detection (YOLO-World, CPU) ----------
 YOLO_MODEL = "yolov8s-worldv2.pt"  # base model, downloaded into MODELS_DIR the first time
@@ -106,8 +107,11 @@ EVENTS_RETRY_MS = 2000          # tells the phone: if the connection drops, reco
 # 384 dimensions (matches vector(384)). Loaded from MODELS_DIR/<name>/ if present, else from Hugging Face.
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
-# ---------- Vision worker ----------
-VISION_QUEUE_MAX = 5        # frames waiting for OCR/YOLO; when full, the OLDEST waiting one is skipped
+# ---------- Vision worker (ingest.py) ----------
+# Two lanes, each one holds only the NEWEST waiting frame (an older waiting frame is replaced):
+#   fast lane: YOLO objects + stairs/door alerts on (almost) every kept frame, ~0.15 s each
+#   slow lane: OCR (seconds per frame) on the newest frame whenever it is free
+# So slow OCR can never make an alert late. Nothing to tune here.
 
 # ---------- Assistant: retrieval ("which frames answer the question?") ----------
 NOW_MAX_AGE_SECONDS = 5     # "what is in front of me": newest frame older than this → "I'm not sure"
