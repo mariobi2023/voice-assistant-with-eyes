@@ -215,6 +215,12 @@ System prompt:
 | GET | `/qa?limit=` | Past questions and answers, newest first | done |
 | GET | `/events?after_id=&language=` | Proactive warnings pushed to the phone (Server-Sent Events) | done |
 | GET | `/alerts?after_id=&language=` | Same warnings by polling (fallback) | done |
+| GET | `/benchmark/config` | Default benchmark models, number of API keys set (never the keys) | done |
+| POST | `/benchmark/enhancement` | Uploaded images: OCR + objects before vs after enhancement | done |
+| POST | `/benchmark/models` | Uploaded images × Gemini models: answer, latency, correct, "not sure" | done |
+| POST | `/benchmark/full` | Both: every model on the original AND the enhanced image | done |
+| POST | `/benchmark/retrieval` | Questions × images: embedding similarity, top-1 accuracy | done |
+| POST | `/benchmark/frame-selection` | Would ingest keep or drop each image, and why | done |
 
 Errors use FastAPI's format `{"detail": ...}`: 422 for an invalid request (e.g. empty or too
 long question), 404 for a missing frame, 500 for a server error. CORS allows the dashboard at
@@ -240,6 +246,21 @@ data: {"id": 1795000012, "type": "stairs", "text": "Stairs ahead.", "conf": 0.8,
   is spoken right after it; never spoken while the microphone listens. Sentences with "safe" are
   removed. Mock mode simulates a warning every 30 s. The app shows "not available on this server
   yet" if the backend answers 404 on `/events`.
+
+### Benchmarks (`/benchmark/*`, `benchmark.py`)
+
+Test endpoints for the results deliverable, used from Swagger (`/docs`): upload up to
+`BENCHMARK_MAX_IMAGES` (10) images as multipart `files`, and get the result as JSON or, with
+`?format=xlsx`, as a formatted Excel file (Info + Summary + detail sheets, green/red for
+better/worse). Faces are blurred right after decoding. **Nothing is stored** (no database rows,
+no files). Answers use the same prompt and "safe" filter as `/ask`. Only one benchmark runs at a
+time (409 otherwise).
+
+- Models compared by default: `BENCHMARK_MODELS` (gemini-3.5-flash-lite, 3.5-flash, 3.8-flash).
+- Several API keys (`GEMINI_API_KEYS=k1,k2,k3` in `.env`) are used in turn by `/ask` and the
+  benchmark. On HTTP 429 the benchmark retries with the next key, and on 503 (model overloaded)
+  it retries once. A model that refuses `thinking_level` is called again without it.
+- `enhancement` / `full` take `mode=auto` (the pipeline rules) or `force` (always brighten + sharpen).
 
 ### Front-end configuration
 
@@ -272,7 +293,10 @@ voice-assistant-with-eyes/
 │   │   ├── migrate.py      # applies migrations/*.sql once each
 │   │   ├── assistant.py    # route → retrieve → Gemini/Ollama → "safe" check → log
 │   │   ├── languages.py    # EN/FR/AR texts, keywords, "safe" patterns
-│   │   └── retention.py    # delete old frames (rows + files)
+│   │   ├── retention.py    # delete old frames (rows + files)
+│   │   ├── benchmark.py    # benchmarks on uploaded images (models, enhancement, retrieval)
+│   │   ├── benchmark_api.py    # /benchmark/* routes
+│   │   └── benchmark_excel.py  # benchmark result → formatted .xlsx
 │   ├── migrations/
 │   ├── setup_database.sql
 │   ├── requirements.txt
@@ -298,7 +322,8 @@ Details: [TEAM.md](TEAM.md).
 5. ✅ Flutter app: stream + voice question + spoken answer (EN/FR/AR).
 6. ✅ Dashboard: live view, status, timeline with images, Q&A history.
 7. Bonuses: ✅ warnings in the app · ✅ `/events` warnings on the server · ✅ image enhancement.
-8. ⬜ Tests: latency, retrieval quality, answer accuracy, user feedback.
+8. ⬜ Tests: latency, retrieval quality, answer accuracy, user feedback
+   (scripts in `tests/`, ✅ `/benchmark/*` endpoints for model / enhancement / retrieval comparisons).
 
 ## 13. Deliverables checklist
 

@@ -37,6 +37,8 @@ uvicorn[standard]==0.54.0        # the web server that runs FastAPI
 google-genai==3.4.0              # Gemini API (answer model)
 httpx==0.28.1                    # HTTP client used by google-genai (we turn off connection reuse)
 requests==2.34.2                 # HTTP calls to the local Ollama fallback
+python-multipart==0.0.20         # lets FastAPI receive uploaded images (benchmark endpoints)
+openpyxl==3.1.5                  # writes the benchmark results as an Excel file (.xlsx)
 
 # --- Settings and network ---
 python-dotenv==1.0.1             # load settings and secrets from server/.env

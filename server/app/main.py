@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from app import alerts, assistant, config, db, vision
+from app import alerts, assistant, benchmark_api, config, db, vision
 from app.ingest import setup_logging, start_pipeline
 from app.languages import normalize_language
 
@@ -39,6 +39,9 @@ app = FastAPI(title="Voice Assistant With Eyes", lifespan=lifespan)
 # Let the React dashboard (another port = another "origin") call this API from the browser.
 app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS,
                    allow_methods=["*"], allow_headers=["*"])
+
+# /benchmark/* endpoints (tests: compare models, enhancement, retrieval). See benchmark_api.py.
+app.include_router(benchmark_api.router)
 
 
 # ---------- Request / response shapes (same field names as the phone app) ----------

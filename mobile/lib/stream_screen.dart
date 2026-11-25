@@ -193,7 +193,6 @@ class _StreamScreenState extends State<StreamScreen> {
         WarningStatus.mock => 'Warnings: mock (every 30 s)',
         WarningStatus.connecting => 'Warnings: server not reachable, retrying…',
         WarningStatus.connected => 'Warnings: connected',
-        WarningStatus.polling => 'Warnings: connected (checking every second)',
         WarningStatus.notOnServer => 'Warnings: not available on this server yet',
       };
 

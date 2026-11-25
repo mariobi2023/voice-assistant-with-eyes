@@ -21,6 +21,8 @@ log = logging.getLogger("vision")
 _ocr_readers = {}             # reader key ("latin" / "arabic") -> easyocr.Reader
 _yolo_model = None
 _load_lock = threading.Lock()  # load each model only once, even if two threads ask
+# The vision thread and the /benchmark endpoints share the same models: run them one at a time.
+_infer_lock = threading.Lock()
 _active_language = config.DEFAULT_LANGUAGE
 
 
@@ -101,7 +103,8 @@ def load_models():
 def run_ocr(frame, language=None):
     """Read the text in the frame. Returns (text, mean confidence), or ("", None) if none."""
     reader = get_ocr_reader(language or _active_language)
-    results = reader.readtext(frame)  # list of (box, text, confidence)
+    with _infer_lock:
+        results = reader.readtext(frame)  # list of (box, text, confidence)
     kept = [(text.strip(), conf) for _box, text, conf in results
             if conf >= config.OCR_MIN_CONF and text.strip()]
     if not kept:
@@ -115,8 +118,10 @@ def run_ocr(frame, language=None):
 
 def detect_objects(frame):
     """Find our custom classes. Returns [{"label", "conf", "box": [x, y, w, h]}], best first."""
-    result = get_yolo_model().predict(frame, conf=config.YOLO_MIN_CONF,
-                                      imgsz=config.YOLO_IMAGE_SIZE, verbose=False)[0]
+    model = get_yolo_model()
+    with _infer_lock:
+        result = model.predict(frame, conf=config.YOLO_MIN_CONF,
+                               imgsz=config.YOLO_IMAGE_SIZE, verbose=False)[0]
     objects = []
     for box in result.boxes:
         x1, y1, x2, y2 = (int(v) for v in box.xyxy[0].tolist())

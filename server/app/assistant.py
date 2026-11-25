@@ -11,6 +11,7 @@ import base64
 import logging
 import re
 import sys
+import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
@@ -26,7 +27,9 @@ from app.languages import (LANGUAGE_NAMES, NOT_SURE, ROUTE_KEYWORDS, SAFE_PATTER
 log = logging.getLogger("assistant")
 
 last_model_used = "none"  # shown by GET /status
-_gemini_client = None
+_gemini_clients = {}  # key index -> Gemini client (one per API key)
+_key_lock = threading.Lock()
+_next_key = 0  # round-robin position in config.GEMINI_API_KEYS
 _gemini_pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="gemini")  # parallel copies
 
 SYSTEM_PROMPT = """You help a blind or visually impaired person.
@@ -143,41 +146,61 @@ def describe_frames(frames):
     return "\n".join(lines)
 
 
-def load_jpeg(image_path, max_width):
-    """Read a stored frame as JPEG bytes, made at most `max_width` pixels wide.
+def encode_jpeg(image, max_width):
+    """Image (OpenCV array) → JPEG bytes, at most `max_width` pixels wide.
     Smaller uploads = faster answers, and fewer requests lost on a weak connection."""
-    image = resize_to_max_width(cv2.imread(str(config.SERVER_DIR / image_path)), max_width)
+    image = resize_to_max_width(image, max_width)
     return cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, config.MODEL_JPEG_QUALITY])[1].tobytes()
 
 
-def get_gemini_client():
-    """Create the Gemini client once.
+def load_jpeg(image_path, max_width):
+    """Read a stored frame as JPEG bytes, made at most `max_width` pixels wide."""
+    return encode_jpeg(cv2.imread(str(config.SERVER_DIR / image_path)), max_width)
+
+
+def next_key_index():
+    """Round-robin over the API keys: each request uses the next key, so the free-tier
+    rate limit of one key is reached later (and a resend copy goes out with another key)."""
+    global _next_key
+    with _key_lock:
+        index = _next_key % max(1, len(config.GEMINI_API_KEYS))
+        _next_key += 1
+        return index
+
+
+def get_gemini_client(key_index=0, timeout_seconds=None):
+    """Create one Gemini client per (API key, timeout) the first time, then reuse it.
     - max_keepalive_connections=0: a NEW connection for every request. Reused connections
       were silently dropped by the network and the request never got an answer.
-    - no automatic SDK retries: ask_gemini_first_answer() decides when to send again."""
-    global _gemini_client
-    if _gemini_client is None:
-        from google import genai
-        from google.genai import types
-        _gemini_client = genai.Client(
-            api_key=config.GEMINI_API_KEY,
-            http_options=types.HttpOptions(
-                timeout=config.GEMINI_REQUEST_TIMEOUT_SECONDS * 1000,
-                retry_options=types.HttpRetryOptions(attempts=1),
-                client_args={"limits": httpx.Limits(max_keepalive_connections=0)},
-            ),
-        )
-    return _gemini_client
+    - no automatic SDK retries: the caller decides when to send again."""
+    timeout_seconds = timeout_seconds or config.GEMINI_REQUEST_TIMEOUT_SECONDS
+    cache_key = (key_index, timeout_seconds)
+    with _key_lock:
+        if cache_key not in _gemini_clients:
+            from google import genai
+            from google.genai import types
+            _gemini_clients[cache_key] = genai.Client(
+                api_key=config.GEMINI_API_KEYS[key_index],
+                http_options=types.HttpOptions(
+                    timeout=int(timeout_seconds * 1000),
+                    retry_options=types.HttpRetryOptions(attempts=1),
+                    client_args={"limits": httpx.Limits(max_keepalive_connections=0)},
+                ),
+            )
+        return _gemini_clients[cache_key]
 
 
-def ask_gemini(system_prompt, user_text, images):
-    """Send the images + evidence to Gemini and return its answer text."""
+def ask_gemini(system_prompt, user_text, images, model=None, key_index=None,
+               thinking_level=config.GEMINI_THINKING_LEVEL, timeout_seconds=None):
+    """Send the images + evidence to Gemini and return its answer text.
+    model/key/thinking/timeout default to the /ask settings; the benchmark changes them."""
     from google.genai import types
+    if key_index is None:
+        key_index = next_key_index()
     parts = [types.Part.from_bytes(data=img, mime_type="image/jpeg") for img in images]
-    thinking = (types.ThinkingConfig(thinking_level=config.GEMINI_THINKING_LEVEL)
-                if config.GEMINI_THINKING_LEVEL else None)
-    response = get_gemini_client().models.generate_content(
-        model=config.GEMINI_MODEL,
+    thinking = types.ThinkingConfig(thinking_level=thinking_level) if thinking_level else None
+    response = get_gemini_client(key_index, timeout_seconds).models.generate_content(
+        model=model or config.GEMINI_MODEL,
         contents=parts + [user_text],
         config=types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.2,
                                            max_output_tokens=config.ANSWER_MAX_TOKENS,
@@ -235,14 +258,21 @@ def ask_ollama(system_prompt, user_text, images, timeout):
     return response.json()["message"]["content"]
 
 
-def generate_answer(question, language, frames, deadline):
-    """Ask Gemini; if it fails (error, 429 rate limit, timeout) ask Ollama with the time left.
-    Returns (answer text, model name), or (None, "none") if both failed."""
-    global last_model_used
+def build_prompts(question, language, frames):
+    """The system prompt (rules) and the user text (evidence + question) sent to the model.
+    Shared with the benchmark, so it tests exactly the same prompt as /ask."""
     system_prompt = SYSTEM_PROMPT.format(language_name=LANGUAGE_NAMES[language],
                                          not_sure=NOT_SURE[language])
     user_text = (f"Evidence from the camera:\n{describe_frames(frames)}\n\n"
                  f"Question (answer in {LANGUAGE_NAMES[language]}): {question}")
+    return system_prompt, user_text
+
+
+def generate_answer(question, language, frames, deadline):
+    """Ask Gemini; if it fails (error, 429 rate limit, timeout) ask Ollama with the time left.
+    Returns (answer text, model name), or (None, "none") if both failed."""
+    global last_model_used
+    system_prompt, user_text = build_prompts(question, language, frames)
 
     if config.GEMINI_API_KEY:
         images = [load_jpeg(f["image_path"], config.GEMINI_IMAGE_WIDTH)

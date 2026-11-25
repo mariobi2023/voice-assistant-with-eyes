@@ -124,7 +124,11 @@ MIN_SIMILARITY = 0.20
 # ---------- Assistant: answer model ----------
 # The phone gives up after 15 s, so the whole answer must be ready before that.
 ANSWER_DEADLINE_SECONDS = 12
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")  # secret: set it in .env
+# Secrets: set them in .env. Free tier = low rate limit per key, so several keys can be given
+# (GEMINI_API_KEYS=key1,key2,key3): requests rotate between them. GEMINI_API_KEY alone still works.
+GEMINI_API_KEYS = [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",") if k.strip()] \
+    or ([os.getenv("GEMINI_API_KEY", "").strip()] if os.getenv("GEMINI_API_KEY", "").strip() else [])
+GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""  # "" = no key configured
 # Check which models YOUR key can use with:  python -m app.assistant --list-models
 # Tested 2026-11-20: flash-lite answers in 1.4-3 s; 3.5-flash and 3.8-flash took > 10 s (too slow).
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
@@ -150,6 +154,14 @@ OLLAMA_CONNECT_TIMEOUT_SECONDS = 1  # Ollama runs on this PC: if it doesn't conn
 OLLAMA_MODEL = "qwen2.5vl:3b"  # small vision model, runs on CPU
 OLLAMA_IMAGE_WIDTH = 512    # Ollama on CPU is slow: send ONE small image only
 ANSWER_MAX_TOKENS = 300
+
+# ---------- Benchmark endpoints (/benchmark/*, tests only: nothing is stored) ----------
+BENCHMARK_MODELS = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]  # compared by default
+BENCHMARK_MAX_IMAGES = 10          # images per request (each one = several model calls)
+BENCHMARK_MAX_UPLOAD_MB = 10       # max size of ONE uploaded image
+BENCHMARK_GEMINI_TIMEOUT_SECONDS = 30  # no phone waiting here: give slow models time to answer
+BENCHMARK_CALL_DELAY_SECONDS = 0.0  # pause between model calls (raise it if the free tier says 429)
+BENCHMARK_OVERLOAD_RETRY_SECONDS = 3.0  # model "overloaded" (HTTP 503): wait this long, try once more
 
 # ---------- Web API ----------
 CORS_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]  # the React dashboard (Vite)

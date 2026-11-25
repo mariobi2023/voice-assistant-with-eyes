@@ -117,6 +117,36 @@ def save_jpeg(frame, captured_at):
     return full_path.relative_to(config.SERVER_DIR).as_posix()  # "frames/2026...jpg"
 
 
+def check_and_enhance(frame):
+    """Enhancement + sharpness check on one (resized) frame. Does not change `frame`.
+    Returns a dict: frame (maybe enhanced), brightness (of the ORIGINAL frame), sharpness
+    (after brightening), enhanced, steps (list of what was done), drop_reason (None = keep).
+    Used by the ingest thread and by the benchmark (same decision in both)."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    brightness = measure_brightness(gray)  # of the ORIGINAL frame (stored in the database)
+    steps = []
+
+    # Enhancement 1: dark? Brighten BEFORE the sharpness check: dark images have weak
+    # edges, so they would otherwise be dropped as "blurry".
+    if enhance.is_dark(brightness):
+        frame = enhance.brighten(frame)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        steps.append("brighten")
+
+    # Check 1: sharp?
+    sharpness = measure_sharpness(gray)
+    drop_reason = None
+    if sharpness < config.SHARPNESS_MIN:
+        drop_reason = f"blurry (sharpness {sharpness:.0f} < {config.SHARPNESS_MIN:.0f})"
+    # Enhancement 2: only slightly blurry? A mild unsharp mask helps OCR read the text.
+    elif enhance.is_slightly_blurry(sharpness):
+        frame = enhance.sharpen(frame)
+        steps.append("sharpen")
+
+    return {"frame": frame, "brightness": brightness, "sharpness": sharpness,
+            "enhanced": bool(steps), "steps": steps, "drop_reason": drop_reason}
+
+
 # ---------- The ingest worker ----------
 
 class Ingestor:
@@ -239,27 +269,12 @@ class Ingestor:
     def _select_and_keep(self, frame, captured_at, live):
         """The checks + saving (see process_frame). Runs under _keep_lock."""
         frame = resize_to_max_width(frame, config.FRAME_MAX_WIDTH)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        brightness = measure_brightness(gray)  # of the ORIGINAL frame (stored in the database)
-        enhanced = False
-
-        # Enhancement 1: dark? Brighten BEFORE the sharpness check: dark images have weak
-        # edges, so they would otherwise be dropped as "blurry".
-        if enhance.is_dark(brightness):
-            frame = enhance.brighten(frame)
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            enhanced = True
-
-        # Check 1: sharp?
-        sharpness = measure_sharpness(gray)
-        if sharpness < config.SHARPNESS_MIN:
-            log.info("Frame dropped: blurry (sharpness %.0f < %.0f)", sharpness, config.SHARPNESS_MIN)
+        checked = check_and_enhance(frame)
+        if checked["drop_reason"]:
+            log.info("Frame dropped: %s", checked["drop_reason"])
             return None
-
-        # Enhancement 2: only slightly blurry? A mild unsharp mask helps OCR read the text.
-        if enhance.is_slightly_blurry(sharpness):
-            frame = enhance.sharpen(frame)
-            enhanced = True
+        frame, sharpness = checked["frame"], checked["sharpness"]
+        brightness, enhanced = checked["brightness"], checked["enhanced"]
 
         # Check 2: new scene? (subtracting two hashes gives the number of different bits)
         frame_hash = compute_phash(frame)
